@@ -1,9 +1,11 @@
 #include "recorder.hpp"
 
-#include <fmt/chrono.h>
-
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <string>
+
+#include <fmt/core.h>
 
 #include "math_tools.hpp"
 #include "tools/logger.hpp"
@@ -15,8 +17,14 @@ Recorder::Recorder(double fps) : init_(false), fps_(fps), queue_(1), stop_thread
   start_time_ = std::chrono::steady_clock::now();
   last_time_ = start_time_;
 
-  auto folder_path = "records";
-  auto file_name = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
+auto folder_path = "records";
+
+  auto now = std::chrono::system_clock::now();
+  std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+  std::tm now_tm = *std::localtime(&now_c);
+  char file_name[64];
+  std::strftime(file_name, sizeof(file_name), "%Y-%m-%d_%H-%M-%S", &now_tm);
+
   text_path_ = fmt::format("{}/{}.txt", folder_path, file_name);
   video_path_ = fmt::format("{}/{}.avi", folder_path, file_name);
 

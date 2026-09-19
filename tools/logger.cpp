@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <string>
+#include <ctime>
 
 namespace tools
 {
@@ -14,7 +15,13 @@ std::shared_ptr<spdlog::logger> logger_ = nullptr;
 
 void set_logger()
 {
-  auto file_name = fmt::format("logs/{:%Y-%m-%d_%H-%M-%S}.log", std::chrono::system_clock::now());
+  auto now = std::chrono::system_clock::now();
+  std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+  std::tm now_tm = *std::localtime(&now_c);
+  char time_buf[64];
+  std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%M-%S", &now_tm);
+
+  auto file_name = fmt::format("logs/{}.log", time_buf);
   auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file_name, true);
   file_sink->set_level(spdlog::level::debug);
 

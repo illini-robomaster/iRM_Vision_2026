@@ -57,6 +57,13 @@ int main(int argc, char * argv[])
 
     plotter.plot(data);
 
+    // 添加打印：打印当前时间和规划的 yaw / pitch
+    std::cout << fmt::format("t: {:.2f}s | Target Yaw: {:.2f} | Plan Yaw: {:.2f} | Plan Yaw Vel: {:.2f}\n",
+                             data["t"].get<double>(),
+                             plan.target_yaw,
+                             plan.yaw,
+                             plan.yaw_vel); 
+
     std::this_thread::sleep_for(10ms);
   }
 

@@ -91,11 +91,11 @@ Eigen::Matrix3d rotation_matrix(const Eigen::Vector3d & ypr)
   double cos_roll = cos(roll);
   double sin_roll = sin(roll);
   // clang-format off
-    Eigen::Matrix3d R{
-      {cos_yaw * cos_pitch, cos_yaw * sin_pitch * sin_roll - sin_yaw * cos_roll, cos_yaw * sin_pitch * cos_roll + sin_yaw * sin_roll},
-      {sin_yaw * cos_pitch, sin_yaw * sin_pitch * sin_roll + cos_yaw * cos_roll, sin_yaw * sin_pitch * cos_roll - cos_yaw * sin_roll},
-      {         -sin_pitch,                                cos_pitch * sin_roll,                                cos_pitch * cos_roll}
-    };
+    Eigen::Matrix3d R;
+    R << cos_yaw * cos_pitch, cos_yaw * sin_pitch * sin_roll - sin_yaw * cos_roll, cos_yaw * sin_pitch * cos_roll + sin_yaw * sin_roll,
+      sin_yaw * cos_pitch, sin_yaw * sin_pitch * sin_roll + cos_yaw * cos_roll, sin_yaw * sin_pitch * cos_roll - cos_yaw * sin_roll,
+              -sin_pitch,                                cos_pitch * sin_roll,                                cos_pitch * cos_roll
+    ;
   // clang-format on
   return R;
 }
@@ -126,11 +126,10 @@ Eigen::MatrixXd xyz2ypd_jacobian(const Eigen::Vector3d & xyz)
   auto ddistance_dz = z / std::pow((x * x + y * y + z * z), 0.5);
 
   // clang-format off
-  Eigen::MatrixXd J{
-    {dyaw_dx, dyaw_dy, dyaw_dz},
-    {dpitch_dx, dpitch_dy, dpitch_dz},
-    {ddistance_dx, ddistance_dy, ddistance_dz}
-  };
+  Eigen::MatrixXd J;
+  J << dyaw_dx, dyaw_dy, dyaw_dz,
+       dpitch_dx, dpitch_dy, dpitch_dz,
+       ddistance_dx, ddistance_dy, ddistance_dz;
   // clang-format on
 
   return J;
@@ -166,11 +165,10 @@ Eigen::MatrixXd ypd2xyz_jacobian(const Eigen::Vector3d & ypd)
   auto dz_ddistance = sin_pitch;
 
   // clang-format off
-  Eigen::MatrixXd J{
-    {dx_dyaw, dx_dpitch, dx_ddistance},
-    {dy_dyaw, dy_dpitch, dy_ddistance},
-    {dz_dyaw, dz_dpitch, dz_ddistance}
-  };
+  Eigen::MatrixXd J;
+  J << dx_dyaw, dx_dpitch, dx_ddistance,
+       dy_dyaw, dy_dpitch, dy_ddistance,
+       dz_dyaw, dz_dpitch, dz_ddistance;
   // clang-format on
 
   return J;

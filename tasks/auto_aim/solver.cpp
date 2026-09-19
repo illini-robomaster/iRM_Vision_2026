@@ -98,11 +98,11 @@ std::vector<cv::Point2f> Solver::reproject_armor(
   auto cos_pitch = std::cos(pitch);
 
   // clang-format off
-  const Eigen::Matrix3d R_armor2world {
-    {cos_yaw * cos_pitch, -sin_yaw, cos_yaw * sin_pitch},
-    {sin_yaw * cos_pitch,  cos_yaw, sin_yaw * sin_pitch},
-    {         -sin_pitch,        0,           cos_pitch}
-  };
+  Eigen::Matrix3d R_armor2world;
+    R_armor2world << cos_yaw * cos_pitch, -sin_yaw, cos_yaw * sin_pitch,
+    sin_yaw * cos_pitch,  cos_yaw, sin_yaw * sin_pitch,
+            -sin_pitch,        0,           cos_pitch
+  ;
   // clang-format on
 
   // get R_armor2camera t_armor2camera
@@ -163,11 +163,10 @@ double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
   auto cos_pitch = std::cos(pitch);
 
   // clang-format off
-  const Eigen::Matrix3d _R_armor2world {
-    {cos_yaw * cos_pitch, -sin_yaw, cos_yaw * sin_pitch},
-    {sin_yaw * cos_pitch,  cos_yaw, sin_yaw * sin_pitch},
-    {         -sin_pitch,        0,           cos_pitch}
-  };
+  Eigen::Matrix3d _R_armor2world;
+  _R_armor2world << cos_yaw * cos_pitch, -sin_yaw, cos_yaw * sin_pitch,
+                    sin_yaw * cos_pitch,  cos_yaw, sin_yaw * sin_pitch,
+                    -sin_pitch,        0,           cos_pitch;
   // clang-format on
 
   // get R_armor2camera t_armor2camera

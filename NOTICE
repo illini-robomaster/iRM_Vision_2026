@@ -1,0 +1,14 @@
+NOTICE
+======
+
+This repository is a Jetson / aarch64 port based on the following upstream
+project, with inference migration toward CUDA / TensorRT:
+
+    TongjiSuperPower/sp_vision_25
+    https://github.com/TongjiSuperPower/sp_vision_25
+    MIT License, Copyright (c) 2025 TongjiSuperPower
+
+The upstream MIT license text is retained unmodified in LICENSE.
+Scripts, platform adaptations and port-specific additions in this repository
+are Copyright (c) 2026 Illini RoboMaster and distributed under the same MIT
+License, unless stated otherwise in the individual files.

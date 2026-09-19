@@ -13,3 +13,8 @@ testvideos/
 watchdog.sh
 records_24/
 records_25/
+
+# TensorRT 引擎 / 计划文件（离线生成，不入库）
+*.engine
+*.plan
+*.trt

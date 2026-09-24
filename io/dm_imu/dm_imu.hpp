@@ -67,6 +67,12 @@ class DM_IMU
 {
 public:
   DM_IMU();
+
+  // port 为串口设备名，默认 "/dev/ttyACM0"；
+  // port == "none" 时进入「无 IMU 回放模式」：不打开串口、不启动收数线程，
+  // imu_at() 恒返回单位四元数（x86_64 / WSL2 离线调试用）。
+  explicit DM_IMU(const std::string & port);
+
   ~DM_IMU();
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
@@ -80,6 +86,9 @@ private:
 
   void init_serial();
   void get_imu_data_thread();
+
+  bool mock_ = false;
+  std::string port_ = "/dev/ttyACM0";
 
   serial::Serial serial_;
   std::thread rec_thread_;

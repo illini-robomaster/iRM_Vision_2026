@@ -14,8 +14,18 @@
 
 namespace io
 {
-DM_IMU::DM_IMU() : queue_(5000)
+DM_IMU::DM_IMU() : DM_IMU("/dev/ttyACM0") {}
+
+DM_IMU::DM_IMU(const std::string & port) : port_(port), queue_(5000)
 {
+  if (port_ == "none") {
+    // 无 IMU 回放模式：x86_64 / WSL2 上没有达妙 IMU 串口，用单位四元数代替
+    mock_ = true;
+    tools::logger()->warn(
+      "[DM_IMU] running WITHOUT IMU (port=none), imu_at() returns identity quaternion");
+    return;
+  }
+
   init_serial();
   rec_thread_ = std::thread(&DM_IMU::get_imu_data_thread, this);
   queue_.pop(data_ahead_);
@@ -37,7 +47,7 @@ DM_IMU::~DM_IMU()
 void DM_IMU::init_serial()
 {
   try {
-    serial_.setPort("/dev/ttyACM0");
+    serial_.setPort(port_);
     serial_.setBaudrate(921600);
     serial_.setFlowcontrol(serial::flowcontrol_none);
     serial_.setParity(serial::parity_none);  //default is parity_none
@@ -52,7 +62,7 @@ void DM_IMU::init_serial()
   }
 
   catch (serial::IOException & e) {
-    tools::logger()->warn("[DM_IMU] failed to open serial port ");
+    tools::logger()->warn("[DM_IMU] failed to open serial port {} : {}", port_, e.what());
     exit(0);
   }
 }
@@ -105,6 +115,9 @@ void DM_IMU::get_imu_data_thread()
 
 Eigen::Quaterniond DM_IMU::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
+  // 无 IMU 回放模式：恒返回单位四元数
+  if (mock_) return Eigen::Quaterniond::Identity();
+
   if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
 
   while (true) {

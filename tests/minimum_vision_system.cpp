@@ -14,6 +14,7 @@
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ? | | 输出命令行参数说明}"
@@ -29,10 +30,15 @@ int main(int argc, char * argv[])
 
   auto config_path = cli.get<std::string>("@config-path");
 
+  // imu_name 为新增可选键（默认 "/dev/ttyACM0"）；设为 "none" 可在 x86_64 / WSL2 上
+  // 无 IMU 硬件时跑通主链路（单位四元数替代真实姿态）
+  auto yaml = tools::load(config_path);
+  auto imu_name = yaml["imu_name"] ? yaml["imu_name"].as<std::string>() : std::string("/dev/ttyACM0");
+
   tools::Exiter exiter;
   tools::Plotter plotter;
   io::Camera camera(config_path);
-  io::DM_IMU dm_imu;
+  io::DM_IMU dm_imu(imu_name);
 
   auto_aim::multithread::MultiThreadDetector detector(config_path);
   auto_aim::Solver solver(config_path);

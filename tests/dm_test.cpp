@@ -1,3 +1,5 @@
+#include <opencv2/opencv.hpp>
+
 #include <chrono>
 #include <thread>
 
@@ -8,10 +10,22 @@
 
 using namespace std::chrono_literals;
 
-int main()
+const std::string keys =
+  "{help h usage ? |              | 输出命令行参数说明 }"
+  "{port p         | /dev/ttyACM0 | 串口设备名；none = 无 IMU 回放模式（单位四元数） }";
+
+int main(int argc, char * argv[])
 {
+  cv::CommandLineParser cli(argc, argv, keys);
+  if (cli.has("help")) {
+    cli.printMessage();
+    return 0;
+  }
+
+  auto port = cli.get<std::string>("port");
+
   tools::Exiter exiter;
-  io::DM_IMU imu;
+  io::DM_IMU imu(port);
 
   while (!exiter.exit()) {
     auto timestamp = std::chrono::steady_clock::now();

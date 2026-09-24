@@ -16,6 +16,23 @@ if [ "${1:-}" != "-y" ]; then
   APT_ARGS=()
 fi
 
+echo "[0/3] 环境自检"
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  echo "  - 检测到 WSL2"
+  case "${REPO_ROOT}" in
+    /mnt/*)
+      echo "  !! 仓库位于 /mnt/...（Windows 驱动器）。跨 9p 文件系统编译极慢且文件事件异常，"
+      echo "     建议移到 WSL 自己的 ext4 上重新 clone，例如："
+      echo "       git clone <url> ~/sp_vision_25 && cd ~/sp_vision_25 && bash scripts/setup_x86_dev.sh -y"
+      ;;
+  esac
+  echo "  - 提示：WSL 内默认没有 USB 设备（工业相机 / UVC 相机 / 达妙 IMU / USB2CAN）。"
+  echo "     需实测硬件时在 Windows 侧装 usbipd-win 并 attach；纯调试请用 configs/offline.yaml 回放。"
+  echo "  - 提示：cv::imshow 需要 WSLg（Win11/已更新 Win10）；没有就加 -d display 时不要用图形界面。"
+else
+  echo "  - 非 WSL（原生 Linux）"
+fi
+
 echo "[1/3] 安装 apt 依赖（需要 sudo）"
 sudo apt-get update
 sudo apt-get install "${APT_ARGS[@]}" \
@@ -48,11 +65,13 @@ make -C build -j"$(nproc)" \
 
 cat <<'EOF'
 
-完成。可以直接用的离线调试入口：
+完成。可以直接用的调试入口（⚠️ 短选项必须写 -c=<path>，写成 "-c <path>" 会被解析成空值）：
   ./build/planner_test_offline configs/demo.yaml     # 纯规划（无需相机/IMU/CAN）
-  ./build/camera_test -c configs/camera.yaml -d      # 相机取流（需接相机）
-  ./build/usbcamera_test      -c configs/uav.yaml     # USB 相机
-  ./build/cboard_test -c configs/uav.yaml             # CAN 通信（需 can0）
+  ./build/camera_test -c=configs/offline.yaml        # 视频文件回放取流（实测 29.97 fps）
+  ./build/dm_test -p=none                            # 无 IMU 回放模式自检
+  ./build/camera_test -c=configs/camera.yaml -d      # 真实相机取流（需接相机）
+  ./build/usbcamera_test -c=configs/uav.yaml         # USB 相机（需 /dev/videoN）
+  ./build/cboard_test -c=configs/uav.yaml            # CAN 通信（需 can0）
 
 注意：需要推理后端的目标（uav / minimum_vision_system / auto_buff* / *_detect_test /
 detector_video_test / auto_aim_test）在 TensorRT 迁移完成前无法编译，见 AGENTS.md §4、§8。

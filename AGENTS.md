@@ -197,6 +197,11 @@ make -C build/ <target> -j$(nproc)
   - `io/CMakeLists.txt` 对非 `x86_64` / `aarch64` 直接 `message(FATAL_ERROR)`；
   - `io/socketcan.hpp` 依赖 `<linux/can.h>` / `<sys/epoll.h>`（`io/cboard.cpp` 链路）；
   - MindVision / HikRobot SDK 只提供 Linux `.so`（仓库内已有 `lib/amd64` 与 `lib/arm64`）。
+- **WSL2 补充**（Windows + WSL2 是最常见的笔记本形态）：
+  - 仓库**必须 clone 到 WSL 的 ext4 文件系统**（如 `~/sp_vision_25`），不要放 `/mnt/c/...`：跨 9p 文件系统编译会慢一个数量级，且文件事件/权限行为异常。
+  - USB 设备（工业相机 / UVC 相机 / 达妙 IMU 串口 / USB2CAN）不会自动出现在 WSL 里，需要 Windows 侧 `usbipd-win` + `usbipd attach`；不接硬件时走 §8.4 的回放模式。
+  - GUI（`cv::imshow`）需要 WSLg（Win11 或已更新的 Win10）；没有 WSLg 就用 `ssh -X` / VcXsrv，或干脆不加 `-d display`。
+  - WSL 里没有 `can0` 硬件，但 `io::CBoard` 打开失败只 `logger()->warn`（`io/socketcan.hpp` 的 `try_open`），不会退出，不影响纯视觉链路。
 - 不要在机器之间复用 `build/`：`CMakeCache.txt` 记录了编译器（`/usr/bin/aarch64-linux-gnu-g++`）与库路径（`/usr/lib/aarch64-linux-gnu/...`）。每台机器各自 `cmake -B build`。
 - 笔记本上 Eigen 3.4 / fmt 8+ / spdlog 1.9+ 都能编过（本仓库代码按 3.3.7 / fmt 6 兼容写法编写，向上兼容），但**基线仍是 Jetson 上的 Eigen 3.3.7 + fmt 6.1.2 + spdlog 1.5**，新增代码必须两边都能编。
 
@@ -215,11 +220,26 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 - 依赖推理后端、当前无法编译的目标：见 §6.1（预期状态）。
 - CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述子集，并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）。
 
-### 8.4 笔记本上跑端到端回放前需要补的 IO 降级（当前缺口，尚未实现）
-- `io::DM_IMU`：打不开 `/dev/ttyACM0` 会 `logger()->warn` 后直接 `exit(0)`（`io/dm_imu/dm_imu.cpp`）→ 无 IMU 时整进程退出。
-- `io::Gimbal`：打不开 `/dev/gimbal` 会 `exit(1)`。
-- `io::Camera`：只有 `mindvision` / `hikrobot` 两个后端，没有视频文件 / USB 后端；`io::USBCamera::open()` 强制 `"/dev/" + name` + `cv::CAP_V4L`，**不能**用来读 `.avi`。
-- 因此笔记本上目前只能跑 `planner_test_offline`（纯规划）与需要真实硬件的 `*_test`；新增后端/降级必须用新键名（如 `camera_name: "video"` + `video_path`），不得重命名或删除 `configs/*.yaml` 已有键。
+### 8.4 离线回放（已实现，x86_64 / WSL2 可用）
+
+用**新增键**替代真实相机与 IMU，已有 `configs/*.yaml` 的键一个都没有改：
+
+| 新增键 | 取值 | 说明 |
+|---|---|---|
+| `camera_name` | `"video"` | 新增的第 3 个相机后端：从视频文件取流 |
+| `video_path` | `assets/demo/demo.avi` | 视频文件路径 |
+| `video_loop` | `true` / `false` | 播到结尾是否回卷，默认 `true` |
+| `video_frame_rate` | `0` | 取流帧率，`0` = 用视频文件自带帧率（默认 `0`），非法/取不到时兜底 30 |
+| `imu_name` | `"none"` / `"/dev/ttyACM0"` | `"none"` = 无 IMU 回放模式，`imu_at()` 恒返回单位四元数（默认 `/dev/ttyACM0`） |
+
+- 现成配置：`configs/offline.yaml`（= `configs/demo.yaml` + 上述 5 个键）。
+- 实测（Jetson 上跑 x86 同一份代码）：`./build/camera_test -c=configs/offline.yaml` → **平均 29.97 fps**（目标 30，179 帧/6s）；`./build/dm_test -p=none` → `z0.00 y0.00 x0.00`；快放到结尾会正常回卷（`reached the end, rewinding`）不崩溃。注意 `assets/demo/demo.avi` 无索引（`CAP_PROP_FRAME_COUNT = 0`），回卷实现是 release + reopen，不能用 `set(CAP_PROP_POS_FRAMES, 0)`。
+- ⚠️ **参数写法**：本仓库程序用 `cv::CommandLineParser`，短选项必须写 `-c=<path>` / `--config-path=<path>`；写成 `-c <path>`（空格分隔）会被解析成空值，报 `[YAML] Failed to load file: bad file`。
+- `io::USBCamera::open()` 仍强制 `"/dev/" + name` + `cv::CAP_V4L`，**不能**读 `.avi`；读视频请走 `io::Camera` + `camera_name: "video"`。
+
+### 8.5 仍然缺的降级（尚未实现）
+- `io::Gimbal`：打不开 `/dev/gimbal` 仍会 `exit(1)`（`io/gimbal/gimbal.cpp`）→ `planner_test` / `fire_test` / `gimbal_test` 在笔记本上跑不了（`planner_test_offline` 不受影响）。
+- `uav` / `uav_debug` / `minimum_vision_system` 已接入上述回放键，但在 §4 的 TensorRT 迁移完成前**无法编译**，所以笔记本上的端到端回放要等迁移完成。
 
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
 - [ ] `make -C build/ <target> -j$(nproc)` 实际编译通过（§6.1、§6.2）

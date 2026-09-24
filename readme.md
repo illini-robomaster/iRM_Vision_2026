@@ -168,6 +168,8 @@ IMU型号：使用C板内置BMI088作为IMU\
         # lrwxrwxrwx 1 root root 7 Jul 21 10:00 /dev/gimbal -> ttyACM0
         ```
 
+> **x86_64 / WSL2 开发机**：Jetson 不在手上时，也可以在笔记本（Windows + WSL2 的 Ubuntu）上编译并做离线回放调试，见本节末尾的 3.6。
+
 ### 3.3 数据流图
 视觉相关模块如图3.1所示。其中，相机线程产生图像、时间戳，通过下位机线程获取对应的云台姿态四元数；图像经过识别器，获得装甲板的四个顶点像素坐标，以及其图案类别；估计器根据装甲板信息，获得目标单位的运动状态；决策器则根据当前的目标运动状态信息，预测目标的运动轨迹，从而判断最佳瞄准位置和最佳开火时机，形成指令发送给下位机；最后控制器和执行机构则根据该指令进行执行，从而完成一个完整的自瞄流程。
 ![数据流图](https://github.com/user-attachments/assets/b89ce42f-a769-49c5-b82a-d69aeac02925)
@@ -242,6 +244,69 @@ sp_vision_25
     └── ...
 ```    
 
+
+### 3.6 x86_64 / WSL2 开发与测试（本仓库移植补充）
+
+> 本节是本仓库（Jetson / aarch64 移植分支）新增内容：Jetson 不在手上时，用 x86_64 电脑（Windows + WSL2 是最常见形态）编译、跑离线回放、调参。完整约束见仓库根目录 `AGENTS.md` §8。
+
+#### 3.6.1 平台前提
+
+- **只支持 x86_64 Linux**：原生 Ubuntu，或 Windows 上的 WSL2。macOS / Windows 原生**不支持**——`io/CMakeLists.txt` 对非 `x86_64`/`aarch64` 直接 `FATAL_ERROR`；`io/socketcan.hpp` 依赖 `<linux/can.h>`；MindVision / HikRobot SDK 只提供 Linux `.so`（仓库内已含 `lib/amd64` 与 `lib/arm64`）。
+- **WSL2 的四个坑**：
+  1. 仓库必须 clone 到 WSL 自己的 ext4 文件系统（如 `~/iRM_Vision_2026`），**不要**放在 `/mnt/c/...`：跨 9p 文件系统编译会慢一个数量级，且文件事件/权限行为异常；
+  2. USB 设备（工业相机 / USB 相机 / 达妙 IMU 串口 / USB2CAN）不会自动出现在 WSL 里，需要 Windows 侧装 `usbipd-win` 再 `usbipd attach`；不接硬件就用 3.6.3 的回放模式；
+  3. `cv::imshow` 需要 WSLg（Win11 或已更新的 Win10）；没有 WSLg 就不要加 `-d display`，或改用 `ssh -X` / VcXsrv；
+  4. WSL 里没有 `can0` 硬件：`io::CBoard` 打开失败只 `logger()->warn`（`io/socketcan.hpp` 的 `try_open`），不会退出，不影响纯视觉链路。
+- 不要在机器之间复用 `build/`：`CMakeCache.txt` 里记录了编译器与库路径，每台机器各自 `cmake -B build`。
+
+#### 3.6.2 环境准备与编译
+
+```bash
+# ① 在 WSL 里 clone（WSL 是另一台机器，需要单独配 SSH key，或改用 HTTPS + PAT）
+cd ~ && git clone git@github.com:illini-robomaster/iRM_Vision_2026.git
+cd iRM_Vision_2026
+
+# ② 一键：装 apt 依赖 + 生成 .vscode/eigen_fix.h + configure + 编译可移植子集
+bash scripts/setup_x86_dev.sh -y
+```
+
+依赖：`build-essential cmake libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libceres-dev can-utils`（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 里 `find_package(Ceres REQUIRED)` 的必需项）。
+
+**当前可移植的目标子集**（不依赖推理后端，22 个）：
+- 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
+- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`
+
+**依赖推理后端、当前编译失败**（属预期状态，TensorRT 迁移完成后恢复）：`uav`、`uav_debug`、`minimum_vision_system`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`、`auto_aim_test`、`camera_detect_test`、`camera_thread_test`、`usbcamera_detect_test`、`detector_video_test`。原因只有两类：缺 `<openvino/openvino.hpp>`，或 `auto_aim::YOLO` 符号未参与编译。
+
+#### 3.6.3 离线回放（无需相机 / IMU / 下位机）
+
+用**新增配置键**替代真实硬件，`configs/*.yaml` 已有键一个都没有改：
+
+| 新增键 | 取值 | 说明 |
+|---|---|---|
+| `camera_name` | `"video"` | 从视频文件取流（第 3 个相机后端） |
+| `video_path` | `assets/demo/demo.avi` | 视频文件路径 |
+| `video_loop` | `true` / `false` | 播到结尾是否回卷，默认 `true` |
+| `video_frame_rate` | `0` | 取流帧率，`0` = 用视频文件自带帧率（默认 `0`），取不到时兜底 30 |
+| `imu_name` | `"none"` / `"/dev/ttyACM0"` | `"none"` = 无 IMU 回放模式，`imu_at()` 恒返回单位四元数（默认 `/dev/ttyACM0`） |
+
+现成配置：`configs/offline.yaml`（= `configs/demo.yaml` + 上述 5 个键）。
+
+```bash
+./build/planner_test_offline configs/demo.yaml   # 纯规划（无相机/IMU/CAN）
+./build/camera_test -c=configs/offline.yaml      # 视频文件回放取流（可加 -d 显示）
+./build/dm_test -p=none                          # 无 IMU 回放模式自检
+```
+
+实测（同一份 x86 代码在 Jetson 上运行）：`camera_test -c=configs/offline.yaml` 平均 **29.97 fps**（目标 30，239 帧/8s），快放播到结尾会正常回卷；`dm_test -p=none` 输出 `z0.00 y0.00 x0.00 degree`。
+
+> ⚠️ **参数写法**：本仓库程序都用 `cv::CommandLineParser`，短选项必须写 `-c=<path>` 或 `--config-path=<path>`；写成 `-c <path>`（空格分隔）会被解析成空值，报 `[YAML] Failed to load file: bad file`。
+
+> `io::USBCamera::open()` 强制 `"/dev/" + name` + `cv::CAP_V4L`，**不能**读 `.avi`；读视频请走 `io::Camera` + `camera_name: "video"`。
+
+#### 3.6.4 CI
+
+`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上述 22 个目标，并冒烟运行 `planner_test_offline`、`camera_test`（视频回放）、`dm_test -p=none`，用于保证 x86_64 这条开发链路不会被改坏。
 
 ## 4 轨迹视角下的自瞄理论
 ### 4.1 引言

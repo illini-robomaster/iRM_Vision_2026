@@ -138,6 +138,25 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
   5. **复用预处理/后处理**：letterbox、`cv::resize` 到输入、NMS、关键点解码逻辑尽量沿用现状，只替换推理调用点。
 - 不把 `.engine` / `.plan` 大文件提交进 git（必要时先说明再改 `.gitignore`）。
 
+### 4.2 装甲板检测模型：来源与输出格式（实测确认）
+
+- 本仓库配套模型 = **RobotPilots P24-DetectionModel**（魔改 YOLOv5 + MobileNetV3 backbone）。
+  已在 Jetson 上解包 `assets/yolov5.xml` 确认结构吻合：
+  `HSwish×17 + HSigmoid×9 + GroupConvolution×11`（MobileNetV3 特征算子）、`Swish×24`、单输入
+  `1×3×640×640`(FP32)、单输出 `Concat("output") = [1, 25200, 22]`（25200 = 80²+40²+20²）。
+- 22 列含义与 `tasks/auto_aim/yolos/yolov5.cpp::parse()` 一一对应：
+  - `col 0..7`：4 个关键点（代码按 0→1→2→3 映射为 左上/右下/右上/左下）
+  - `col 8`：置信度 —— **模型输出 raw logits，代码里再 `sigmoid()`**（若把 sigmoid 固化进 ONNX 会二次 sigmoid）
+  - `col 9..12`：颜色（红 / 蓝 / 灰 / 紫）；`col 13..21`：编号 9 类（G / 1 / 2 / 3 / 4 / 5 / O / Bs / Bb）
+  - 说明：`parse()` 只做 `argmax`，不额外 softmax，因此颜色/编号列保持原始 logits 即可。
+- **迁移 TensorRT 需要 ONNX**：仓库与本机都只有 OpenVINO IR（`assets/yolov5.xml` + `.bin`），
+  IR 不能喂 `trtexec`，也没有可靠的 IR→ONNX 反导出路径。必须拿到同一权重的原始 `.pt` / `.onnx`，
+  转换后用 `trtexec` 核对输出仍是 `[1, 25200, 22]` 的 raw logits。
+- 其它权重：`assets/yolo11.xml` 是 INT8 量化版（含 `FakeQuantize×110`）；`assets/best2-sim.onnx` 是
+  打符用 YOLOv8n-pose（`names={0:'b'}`、`kpt_shape=[5,2]`、5 个扇叶关键点）；`assets/tiny_resnet.onnx`
+  是装甲板数字分类器。新增/替换权重时不要删掉已有文件（`configs/*.yaml` 里还有 `yolo11_model_path` /
+  `yolov8_model_path` / `classify_model` 等键指向它们）。
+
 ## 5. 不可改动的架构约定
 
 | 模块 | 文件 | 约束 |

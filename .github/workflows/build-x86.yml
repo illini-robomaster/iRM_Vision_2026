@@ -1,0 +1,56 @@
+name: build-x86
+
+# x86_64 Linux 构建检查（Jetson 不在手上时的离线/回放开发基线）
+#
+# 只编译「不依赖推理后端」的目标子集。检测相关目标（uav / uav_debug /
+# minimum_vision_system / auto_buff* / *_detect_test / detector_video_test /
+# auto_aim_test）在 TensorRT 迁移完成前无法编译，属预期状态，见 AGENTS.md §4、§8。
+#
+# 厂商相机库（MvCameraControl / MVSDK）的 amd64 预编译 .so 随仓库提供；
+# 其余依赖（OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann_json / libusb / Ceres）走 apt。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake \
+            libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
+            libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libceres-dev
+
+      - name: Configure
+        run: cmake -B build
+
+      - name: Build portable target subset
+        run: |
+          make -C build -j"$(nproc)" \
+            serial tools io auto_aim tinympcstatic omniperception \
+            planner_test planner_test_offline \
+            camera_test usbcamera_test multi_usbcamera_test cboard_test dm_test \
+            fire_test gimbal_test gimbal_response_test handeye_test \
+            capture split_video \
+            calibrate_camera calibrate_handeye calibrate_robotworld_handeye
+
+      - name: Smoke test (planner_test_offline replay)
+        run: |
+          set +e
+          timeout -s INT 5 ./build/planner_test_offline configs/demo.yaml
+          rc=$?
+          set -e
+          # 124 = 被 timeout 正常终止（该程序本身是死循环）；0 = 自行退出
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ]; then
+            echo "planner_test_offline failed with rc=$rc"
+            exit "$rc"
+          fi
+          echo "planner_test_offline ran OK (rc=$rc)"

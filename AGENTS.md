@@ -128,7 +128,7 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
   - `tasks/auto_aim/multithread/mt_detector.{cpp,hpp}`
   - `tasks/auto_buff/yolo11_buff.{cpp,hpp}`
   - 上述文件中的 `ov::Core`、`ov::CompiledModel`、`core_.read_model()`、`compile_model()` 需替换为 TensorRT 封装。
-  - 现状：这些源文件当前被 `tasks/auto_aim/CMakeLists.txt` 与顶层 `CMakeLists.txt` 注释掉（未参与编译），迁移时需同步放开并接上 TensorRT；在此之前改动它们不会有编译反馈。
+  - 现状：`tasks/auto_aim/CMakeLists.txt` 已把 `classifier.cpp`、`detector.cpp`、`yolo.cpp`、`yolos/*.cpp`、`multithread/mt_detector.cpp` 注释掉（未参与编译）；但 `tasks/auto_buff/CMakeLists.txt` **仍在编译 `yolo11_buff.cpp`**，且 `buff_detector.hpp` / `buff_target.hpp` / `buff_aimer.hpp` 都直接 `#include "yolo11_buff.hpp"`，因此 `auto_buff` 目标当前**编译失败**——这是预期状态，不是回归。迁移时需同步放开上述源文件并接上 TensorRT；在此之前改动这些文件不会有完整编译反馈。
 - 迁移硬约束：
   1. **对外接口与类名不变**：`auto_aim::YOLO` / `YOLOV5` / `YOLOV8` / `YOLO11` 的构造签名
      `(const std::string & config_path, bool debug = false)` 与 `detect(...)` 返回类型保持不变。
@@ -156,8 +156,10 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
 ```bash
 make -C build/ <target> -j$(nproc)
 ```
-当前 `build/` 可用目标（ROS 未启用时）：
-`uav`、`uav_debug`、`auto_buff_debug_mpc`、`auto_aim_test`、`auto_buff_test`、`planner_test`、`planner_test_offline`、`camera_test`、`camera_thread_test`、`camera_detect_test`、`usbcamera_test`、`usbcamera_detect_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`detector_video_test`、`minimum_vision_system`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`，库目标 `auto_aim`、`auto_buff`、`omniperception`、`tools`、`io`、`tinympcstatic`。
+`build/` 已配置的目标（ROS 未启用时约 80 个）。按实测（v1.1，在 Jetson 上以 `make -C build/ -k` 全量验证）分成两类：
+
+- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
+- **当前编译失败（依赖推理后端，属预期状态，见 §4）**：`uav`、`uav_debug`、`minimum_vision_system`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`、`auto_aim_test`、`camera_detect_test`、`camera_thread_test`、`usbcamera_detect_test`、`detector_video_test`。原因只有两类：缺 `<openvino/openvino.hpp>`（来自 `classifier.hpp` / `yolos/*.hpp` / `multithread/mt_detector.hpp` / `auto_buff/yolo11_buff.hpp`），或 `auto_aim::YOLO` 符号未参与编译。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成 TensorRT 迁移后再放开。
 
 - **不要**默认执行 `make -C build/` 全量编译；先编译受影响的最小 target。
 - 仅在必要时 `cmake -B build`；**不要删除 `build/`**（重新全量编译成本高）。
@@ -185,5 +187,39 @@ make -C build/ <target> -j$(nproc)
 - [ ] 无 `{{...}}` 初始化，矩阵/向量均为“先声明尺寸 + `<<`”（§0.2、§2.1）
 - [ ] 无 fmt 直接格式化 chrono，时间戳走 `strftime`（§0.3、§3.1）
 - [ ] 无新增/恢复 OpenVINO 依赖，推理走 CUDA / TensorRT（§0.4、§4）
+
+## 8. 笔记本 / x86_64 开发机（Jetson 不在手上时）
+
+目标：在没有 Jetson 的情况下也能编译、跑离线回放与调试。
+
+### 8.1 平台前提（硬限制）
+- **只支持 x86_64 Linux**（原生 Ubuntu 或 WSL2）。不支持 macOS / Windows 原生：
+  - `io/CMakeLists.txt` 对非 `x86_64` / `aarch64` 直接 `message(FATAL_ERROR)`；
+  - `io/socketcan.hpp` 依赖 `<linux/can.h>` / `<sys/epoll.h>`（`io/cboard.cpp` 链路）；
+  - MindVision / HikRobot SDK 只提供 Linux `.so`（仓库内已有 `lib/amd64` 与 `lib/arm64`）。
+- 不要在机器之间复用 `build/`：`CMakeCache.txt` 记录了编译器（`/usr/bin/aarch64-linux-gnu-g++`）与库路径（`/usr/lib/aarch64-linux-gnu/...`）。每台机器各自 `cmake -B build`。
+- 笔记本上 Eigen 3.4 / fmt 8+ / spdlog 1.9+ 都能编过（本仓库代码按 3.3.7 / fmt 6 兼容写法编写，向上兼容），但**基线仍是 Jetson 上的 Eigen 3.3.7 + fmt 6.1.2 + spdlog 1.5**，新增代码必须两边都能编。
+
+### 8.2 环境准备与构建
+```bash
+bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix.h + configure + 编译可移植子集
+```
+该脚本会：
+1. `apt install` OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann-json / libusb-1.0 / Ceres（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 的 `find_package(Ceres REQUIRED)` 必需项）；
+2. 本地生成 `.vscode/eigen_fix.h`（`.vscode/` 被 `.gitignore` 忽略，且 §2.3 要求不提交，所以每台机器都要生成）；
+3. 编译「不依赖推理后端」的目标子集。
+
+### 8.3 当前可移植目标子集
+- 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
+- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`
+- 依赖推理后端、当前无法编译的目标：见 §6.1（预期状态）。
+- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述子集，并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）。
+
+### 8.4 笔记本上跑端到端回放前需要补的 IO 降级（当前缺口，尚未实现）
+- `io::DM_IMU`：打不开 `/dev/ttyACM0` 会 `logger()->warn` 后直接 `exit(0)`（`io/dm_imu/dm_imu.cpp`）→ 无 IMU 时整进程退出。
+- `io::Gimbal`：打不开 `/dev/gimbal` 会 `exit(1)`。
+- `io::Camera`：只有 `mindvision` / `hikrobot` 两个后端，没有视频文件 / USB 后端；`io::USBCamera::open()` 强制 `"/dev/" + name` + `cv::CAP_V4L`，**不能**用来读 `.avi`。
+- 因此笔记本上目前只能跑 `planner_test_offline`（纯规划）与需要真实硬件的 `*_test`；新增后端/降级必须用新键名（如 `camera_name: "video"` + `video_path`），不得重命名或删除 `configs/*.yaml` 已有键。
+
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
 - [ ] `make -C build/ <target> -j$(nproc)` 实际编译通过（§6.1、§6.2）

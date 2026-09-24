@@ -86,7 +86,8 @@ void Solver::solve(std::optional<PowerRune> & ps) const
   Eigen::Matrix3d R_buff2camera;
   cv::cv2eigen(rmat, R_buff2camera);
 
-  Eigen::Vector3d blade_xyz_in_buff{{0, 0, 700e-3}};
+  Eigen::Vector3d blade_xyz_in_buff;
+  blade_xyz_in_buff << 0, 0, 700e-3;
 
   // buff -> camera
   Eigen::Vector3d xyz_in_camera = t_buff2camera;

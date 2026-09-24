@@ -229,19 +229,17 @@ void SmallTarget::update(double nowtime, const PowerRune & p)
   // [angle/row] angle3
 
   // clang-format off
-  Eigen::MatrixXd H1{
-    {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // R_yaw
-    {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0}, // R_pitch
-    {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0}, // R_dis
-    {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0}  // roll
-  };
+  Eigen::MatrixXd H1(4, 7);
+  H1 << 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // R_yaw
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,  // R_pitch
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,  // R_dis
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0;  // roll
 
-  Eigen::MatrixXd R1{
-    {0.01, 0.0, 0.0,  0.0}, // R_yaw
-    {0.0, 0.01, 0.0,  0.0}, // R_pitch
-    {0.0,  0.0, 0.5,  0.0}, // R_dis
-    {0.0,  0.0, 0.0,  0.1}  // roll
-  };
+  Eigen::MatrixXd R1(4, 4);
+  R1 << 0.01, 0.0, 0.0, 0.0,  // R_yaw
+        0.0, 0.01, 0.0, 0.0,  // R_pitch
+        0.0,  0.0, 0.5, 0.0,  // R_dis
+        0.0,  0.0, 0.0, 0.1;  // roll
   // clang-format on
 
   // 防止夹角求差出现异常值
@@ -253,7 +251,8 @@ void SmallTarget::update(double nowtime, const PowerRune & p)
     return c;
   };
 
-  Eigen::VectorXd z1{{R_ypd[0], R_ypd[1], R_ypd[2], ypr[2]}};  // R_ypd roll
+  Eigen::VectorXd z1(4);
+  z1 << R_ypd[0], R_ypd[1], R_ypd[2], ypr[2];  // R_ypd roll
 
   ekf_.update(z1, H1, R1, z_subtract1);
 
@@ -266,18 +265,19 @@ void SmallTarget::update(double nowtime, const PowerRune & p)
   // clang-format off
   Eigen::MatrixXd H2 = h_jacobian();  // 3*7
 
-  Eigen::MatrixXd R2{
-    {0.01, 0.0, 0.0}, // B_yaw
-    {0.0, 0.01, 0.0}, // B_pitch
-    {0.0,  0.0, 0.5}  // B_dis
-  };
+  Eigen::MatrixXd R2(3, 3);
+  R2 << 0.01, 0.0, 0.0,  // B_yaw
+        0.0, 0.01, 0.0,  // B_pitch
+        0.0,  0.0, 0.5;  // B_dis
   // clang-format on
 
   // 定义非线性转换函数h: x -> z
   auto h2 = [&](const Eigen::VectorXd & x) -> Eigen::Vector3d {
-    Eigen::VectorXd R_ypd{{x[0], x[2], x[3]}};
+    Eigen::VectorXd R_ypd(3);
+    R_ypd << x[0], x[2], x[3];
     Eigen::VectorXd R_xyz = tools::ypd2xyz(R_ypd);
-    Eigen::VectorXd R_xyz_and_yr{{R_ypd[0], R_ypd[1], R_ypd[2], x[4], x[5]}};
+    Eigen::VectorXd R_xyz_and_yr(5);
+    R_xyz_and_yr << R_ypd[0], R_ypd[1], R_ypd[2], x[4], x[5];
     Eigen::VectorXd B_xyz = point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.7));
     Eigen::VectorXd B_ypd = tools::xyz2ypd(B_xyz);
     return B_ypd;
@@ -291,7 +291,8 @@ void SmallTarget::update(double nowtime, const PowerRune & p)
     return c;
   };
 
-  Eigen::VectorXd z2{{B_ypd[0], B_ypd[1], B_ypd[2]}};
+  Eigen::VectorXd z2(3);
+  z2 << B_ypd[0], B_ypd[1], B_ypd[2];
 
   ekf_.update(z2, H2, R2, h2, z_subtract2);
 
@@ -305,23 +306,22 @@ Eigen::MatrixXd SmallTarget::h_jacobian() const
   /// Z(3,1) = H3(3,3) * H2(3,5) * H1(5,5) * H0(5,7) * x(7,1)
 
   // clang-format off
-  Eigen::MatrixXd H0{
-    {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0},
-    {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0}
-  };// 5*7
+  Eigen::MatrixXd H0(5, 7);
+  H0 << 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0;  // 5*7
 
-  Eigen::VectorXd R_ypd{{ekf_.x[0], ekf_.x[2], ekf_.x[3]}};
+  Eigen::VectorXd R_ypd(3);
+  R_ypd << ekf_.x[0], ekf_.x[2], ekf_.x[3];
   Eigen::MatrixXd H_ypd2xyz = tools::ypd2xyz_jacobian(R_ypd);  // 3*3
-  Eigen::MatrixXd H1{
-    {H_ypd2xyz(0, 0), H_ypd2xyz(0, 1), H_ypd2xyz(0, 2), 0.0, 0.0},
-    {H_ypd2xyz(1, 0), H_ypd2xyz(1, 1), H_ypd2xyz(1, 2), 0.0, 0.0},
-    {H_ypd2xyz(2, 0), H_ypd2xyz(2, 1), H_ypd2xyz(2, 2), 0.0, 0.0},
-    {            0.0,             0.0,             0.0, 1.0, 0.0},
-    {            0.0,             0.0,             0.0, 0.0, 1.0}
-  };// 5*5
+  Eigen::MatrixXd H1(5, 5);
+  H1 << H_ypd2xyz(0, 0), H_ypd2xyz(0, 1), H_ypd2xyz(0, 2), 0.0, 0.0,
+        H_ypd2xyz(1, 0), H_ypd2xyz(1, 1), H_ypd2xyz(1, 2), 0.0, 0.0,
+        H_ypd2xyz(2, 0), H_ypd2xyz(2, 1), H_ypd2xyz(2, 2), 0.0, 0.0,
+                    0.0,             0.0,             0.0, 1.0, 0.0,
+                    0.0,             0.0,             0.0, 0.0, 1.0;  // 5*5
 
   // double pitch = 0;
   double yaw = ekf_.x[4];
@@ -330,11 +330,10 @@ Eigen::MatrixXd SmallTarget::h_jacobian() const
   double sin_yaw = sin(yaw);
   double cos_roll = cos(roll);
   double sin_roll = sin(roll);
-  Eigen::MatrixXd H2{
-    {1.0, 0.0, 0.0, 0.7 * cos_yaw * sin_roll,  0.7 * sin_yaw * cos_roll},
-    {0.0, 1.0, 0.0, 0.7 * sin_yaw * sin_roll, -0.7 * cos_yaw * cos_roll},
-    {0.0, 0.0, 1.0,                      0.0,           -0.7 * sin_roll}
-  };// 3*5
+  Eigen::MatrixXd H2(3, 5);
+  H2 << 1.0, 0.0, 0.0, 0.7 * cos_yaw * sin_roll,  0.7 * sin_yaw * cos_roll,
+        0.0, 1.0, 0.0, 0.7 * sin_yaw * sin_roll, -0.7 * cos_yaw * cos_roll,
+        0.0, 0.0, 1.0,                      0.0,           -0.7 * sin_roll;  // 3*5
 
   Eigen::VectorXd B_xyz = point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.7));
   Eigen::MatrixXd H3 = tools::xyz2ypd_jacobian(B_xyz);// 3*3
@@ -575,19 +574,17 @@ void BigTarget::update(double nowtime, const PowerRune & p)
   // [angle/row] angle3
 
   // clang-format off
-  Eigen::MatrixXd H1{
-    {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // R_yaw
-    {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // R_pitch
-    {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // R_dis
-    {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0}  // roll
-  };
+  Eigen::MatrixXd H1(4, 10);
+  H1 << 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // R_yaw
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // R_pitch
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // R_dis
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0;  // roll
 
-  Eigen::MatrixXd R1{
-    {0.01, 0.0, 0.0,  0.0}, // R_yaw
-    {0.0, 0.01, 0.0,  0.0}, // R_pitch
-    {0.0,  0.0, 0.5,  0.0}, // R_dis
-    {0.0,  0.0, 0.0, 0.1}  // roll  1: 0.01 2:0.04
-  };
+  Eigen::MatrixXd R1(4, 4);
+  R1 << 0.01, 0.0, 0.0, 0.0,  // R_yaw
+        0.0, 0.01, 0.0, 0.0,  // R_pitch
+        0.0,  0.0, 0.5, 0.0,  // R_dis
+        0.0,  0.0, 0.0, 0.1;  // roll  1: 0.01 2:0.04
   // clang-format on
 
   // 防止夹角求差出现异常值
@@ -599,7 +596,8 @@ void BigTarget::update(double nowtime, const PowerRune & p)
     return c;
   };
 
-  Eigen::VectorXd z1{{R_ypd[0], R_ypd[1], R_ypd[2], ypr[2]}};  // R_ypd roll
+  Eigen::VectorXd z1(4);
+  z1 << R_ypd[0], R_ypd[1], R_ypd[2], ypr[2];  // R_ypd roll
 
   ekf_.update(z1, H1, R1, z_subtract1);
 
@@ -612,18 +610,19 @@ void BigTarget::update(double nowtime, const PowerRune & p)
   // clang-format off
   Eigen::MatrixXd H2 = h_jacobian();  // 3*10
 
-  Eigen::MatrixXd R2{
-    {0.01, 0.0, 0.0}, // B_yaw
-    {0.0, 0.01, 0.0}, // B_pitch
-    {0.0,  0.0, 0.5}  // B_dis
-  };
+  Eigen::MatrixXd R2(3, 3);
+  R2 << 0.01, 0.0, 0.0,  // B_yaw
+        0.0, 0.01, 0.0,  // B_pitch
+        0.0,  0.0, 0.5;  // B_dis
   // clang-format on
 
   // 定义非线性转换函数h: x -> z
   auto h2 = [&](const Eigen::VectorXd & x) -> Eigen::Vector3d {
-    Eigen::VectorXd R_ypd{{x[0], x[2], x[3]}};
+    Eigen::VectorXd R_ypd(3);
+    R_ypd << x[0], x[2], x[3];
     Eigen::VectorXd R_xyz = tools::ypd2xyz(R_ypd);
-    Eigen::VectorXd R_xyz_and_yr{{R_ypd[0], R_ypd[1], R_ypd[2], x[4], x[5]}};
+    Eigen::VectorXd R_xyz_and_yr(5);
+    R_xyz_and_yr << R_ypd[0], R_ypd[1], R_ypd[2], x[4], x[5];
     Eigen::VectorXd B_xyz = point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.7));
     Eigen::VectorXd B_ypd = tools::xyz2ypd(B_xyz);
     return B_ypd;
@@ -637,7 +636,8 @@ void BigTarget::update(double nowtime, const PowerRune & p)
     return c;
   };
 
-  Eigen::VectorXd z2{{B_ypd[0], B_ypd[1], B_ypd[2]}};
+  Eigen::VectorXd z2(3);
+  z2 << B_ypd[0], B_ypd[1], B_ypd[2];
 
   ekf_.update(z2, H2, R2, h2, z_subtract2);
 
@@ -664,23 +664,22 @@ Eigen::MatrixXd BigTarget::h_jacobian() const
   /// Z(3,1) = H3(3,3) * H2(3,5) * H1(5,5) * H0(5,10) * x(10,1)
 
   // clang-format off
-  Eigen::MatrixXd H0{
-    {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-    {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0}
-  };// 5*7
+  Eigen::MatrixXd H0(5, 10);
+  H0 << 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0;  // 5*10
 
-  Eigen::VectorXd R_ypd{{ekf_.x[0], ekf_.x[2], ekf_.x[3]}};
+  Eigen::VectorXd R_ypd(3);
+  R_ypd << ekf_.x[0], ekf_.x[2], ekf_.x[3];
   Eigen::MatrixXd H_ypd2xyz = tools::ypd2xyz_jacobian(R_ypd);  // 3*3
-  Eigen::MatrixXd H1{
-    {H_ypd2xyz(0, 0), H_ypd2xyz(0, 1), H_ypd2xyz(0, 2), 0.0, 0.0},
-    {H_ypd2xyz(1, 0), H_ypd2xyz(1, 1), H_ypd2xyz(1, 2), 0.0, 0.0},
-    {H_ypd2xyz(2, 0), H_ypd2xyz(2, 1), H_ypd2xyz(2, 2), 0.0, 0.0},
-    {            0.0,             0.0,             0.0, 1.0, 0.0},
-    {            0.0,             0.0,             0.0, 0.0, 1.0}
-  };// 5*5
+  Eigen::MatrixXd H1(5, 5);
+  H1 << H_ypd2xyz(0, 0), H_ypd2xyz(0, 1), H_ypd2xyz(0, 2), 0.0, 0.0,
+        H_ypd2xyz(1, 0), H_ypd2xyz(1, 1), H_ypd2xyz(1, 2), 0.0, 0.0,
+        H_ypd2xyz(2, 0), H_ypd2xyz(2, 1), H_ypd2xyz(2, 2), 0.0, 0.0,
+                    0.0,             0.0,             0.0, 1.0, 0.0,
+                    0.0,             0.0,             0.0, 0.0, 1.0;  // 5*5
 
   // double pitch = 0;
   double yaw = ekf_.x[4];
@@ -689,11 +688,10 @@ Eigen::MatrixXd BigTarget::h_jacobian() const
   double sin_yaw = sin(yaw);
   double cos_roll = cos(roll);
   double sin_roll = sin(roll);
-  Eigen::MatrixXd H2{
-    {1.0, 0.0, 0.0, 0.7 * cos_yaw * sin_roll,  0.7 * sin_yaw * cos_roll},
-    {0.0, 1.0, 0.0, 0.7 * sin_yaw * sin_roll, -0.7 * cos_yaw * cos_roll},
-    {0.0, 0.0, 1.0,                      0.0,           -0.7 * sin_roll}
-  };// 3*5
+  Eigen::MatrixXd H2(3, 5);
+  H2 << 1.0, 0.0, 0.0, 0.7 * cos_yaw * sin_roll,  0.7 * sin_yaw * cos_roll,
+        0.0, 1.0, 0.0, 0.7 * sin_yaw * sin_roll, -0.7 * cos_yaw * cos_roll,
+        0.0, 0.0, 1.0,                      0.0,           -0.7 * sin_roll;  // 3*5
 
   Eigen::VectorXd B_xyz = point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.7));
   Eigen::MatrixXd H3 = tools::xyz2ypd_jacobian(B_xyz);// 3*3

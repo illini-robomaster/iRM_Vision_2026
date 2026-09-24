@@ -149,9 +149,17 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
   - `col 8`：置信度 —— **模型输出 raw logits，代码里再 `sigmoid()`**（若把 sigmoid 固化进 ONNX 会二次 sigmoid）
   - `col 9..12`：颜色（红 / 蓝 / 灰 / 紫）；`col 13..21`：编号 9 类（G / 1 / 2 / 3 / 4 / 5 / O / Bs / Bb）
   - 说明：`parse()` 只做 `argmax`，不额外 softmax，因此颜色/编号列保持原始 logits 即可。
-- **迁移 TensorRT 需要 ONNX**：仓库与本机都只有 OpenVINO IR（`assets/yolov5.xml` + `.bin`），
-  IR 不能喂 `trtexec`，也没有可靠的 IR→ONNX 反导出路径。必须拿到同一权重的原始 `.pt` / `.onnx`，
-  转换后用 `trtexec` 核对输出仍是 `[1, 25200, 22]` 的 raw logits。
+- **ONNX 权重已就位**：`assets/yolov5_0526.onnx`（4,359,932 B，md5 `45b111e2ddde9e0b588fef5a38917af4`；
+  来源 `https://github.com/broalantaps/RobotDetectionModel` 的 `Model/0526.onnx`，pytorch 2.0.1 导出，
+  输入名 `images`，输入 `1×3×640×640`）。已用 OpenCV DNN 实测确认：
+  - 输出 `(1, 25200, 22)`，与仓库 IR 一致；
+  - `col 8` 是 **raw logits**（实测 max `+3.29` → sigmoid `0.964`，min `-51.96` → `0.000`），
+    所以 **必须保留 `parse()` 里的 sigmoid，不要把 sigmoid/softmax 固化进转换后的图**；
+  - 官方参考 `OpenvinoInfer.cpp` 的 landmarks→points 映射 `(0,1)(6,7)(4,5)(2,3)` 与
+    `tasks/auto_aim/yolos/yolov5.cpp::parse()` **完全一致**（连点序都是同一个约定）；
+  - `assets/demo/demo.avi` 抽样 16 帧，15 帧在 conf ≥ 0.65 有检出（best 0.90~0.96）。
+  `.engine` 由该 ONNX 离线生成，不入库（`.gitignore` 已忽略）。模型来自第三方（RobotPilots），
+  **仓库保持 private**。
 - 其它权重：`assets/yolo11.xml` 是 INT8 量化版（含 `FakeQuantize×110`）；`assets/best2-sim.onnx` 是
   打符用 YOLOv8n-pose（`names={0:'b'}`、`kpt_shape=[5,2]`、5 个扇叶关键点）；`assets/tiny_resnet.onnx`
   是装甲板数字分类器。新增/替换权重时不要删掉已有文件（`configs/*.yaml` 里还有 `yolo11_model_path` /

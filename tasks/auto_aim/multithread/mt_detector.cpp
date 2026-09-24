@@ -8,93 +8,69 @@ namespace multithread
 {
 
 MultiThreadDetector::MultiThreadDetector(const std::string & config_path, bool debug)
-: yolo_(config_path, debug)
+: debug_(debug), yolo_(config_path, debug)
 {
   auto yaml = YAML::LoadFile(config_path);
   auto yolo_name = yaml["yolo_name"].as<std::string>();
-  auto model_path = yaml[yolo_name + "_model_path"].as<std::string>();
-  device_ = yaml["device"].as<std::string>();
+  auto backend =
+    yaml["yolov5_backend"] ? yaml["yolov5_backend"].as<std::string>() : std::string("auto");
 
-  auto model = core_.read_model(model_path);
-  ov::preprocess::PrePostProcessor ppp(model);
-  auto & input = ppp.input();
+  tools::logger()->info(
+    "[MultiThreadDetector] yolo_name={}, backend={}（推理在后端内部完成）", yolo_name, backend);
 
-  input.tensor()
-    .set_element_type(ov::element::u8)
-    .set_shape({1, 640, 640, 3})  // TODO
-    .set_layout("NHWC")
-    .set_color_format(ov::preprocess::ColorFormat::BGR);
-
-  input.model().set_layout("NCHW");
-
-  input.preprocess()
-    .convert_element_type(ov::element::f32)
-    .convert_color(ov::preprocess::ColorFormat::RGB)
-    // .resize(ov::preprocess::ResizeAlgorithm::RESIZE_LINEAR)
-    .scale(255.0);
-
-  model = ppp.build();
-  compiled_model_ = core_.compile_model(
-    model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::THROUGHPUT));
-
+  detect_thread_ = std::thread(&MultiThreadDetector::detect_thread, this);
   tools::logger()->info("[MultiThreadDetector] initialized !");
+}
+
+MultiThreadDetector::~MultiThreadDetector()
+{
+  stop_ = true;
+  in_queue_.clear();  // 先清空，保证停止信号一定能入队
+  in_queue_.push({cv::Mat(), std::chrono::steady_clock::now()});
+  if (detect_thread_.joinable()) detect_thread_.join();
+
+  tools::logger()->info("[MultiThreadDetector] destructed.");
+}
+
+void MultiThreadDetector::detect_thread()
+{
+  while (true) {
+    auto frame = in_queue_.pop();
+
+    if (frame.img.empty()) {
+      if (stop_) break;
+      tools::logger()->warn("[MultiThreadDetector] received empty frame, skip");
+      continue;
+    }
+
+    // 推理 + 置信度阈值 + NMS + 关键点解码都在 YOLO 后端内部完成
+    auto armors = yolo_.detect(frame.img, 0);
+    out_queue_.push({frame.img, std::move(armors), frame.t});
+  }
 }
 
 void MultiThreadDetector::push(cv::Mat img, std::chrono::steady_clock::time_point t)
 {
-  auto x_scale = static_cast<double>(640) / img.rows;
-  auto y_scale = static_cast<double>(640) / img.cols;
-  auto scale = std::min(x_scale, y_scale);
-  auto h = static_cast<int>(img.rows * scale);
-  auto w = static_cast<int>(img.cols * scale);
+  if (img.empty()) {
+    tools::logger()->warn("[MultiThreadDetector] push an empty img, camera drop!");
+    return;
+  }
 
-  // preproces
-  auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-  auto roi = cv::Rect(0, 0, w, h);
-  cv::resize(img, input(roi), {w, h});
-
-  auto input_port = compiled_model_.input();
-  auto infer_request = compiled_model_.create_infer_request();
-  ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
-
-  infer_request.set_input_tensor(input_tensor);
-  infer_request.start_async();
-  queue_.push({img.clone(), t, std::move(infer_request)});
+  // 相机缓冲会被复用，这里必须拷贝（debug_pop 还要把原图交回调用方）
+  in_queue_.push({img.clone(), t});
 }
 
 std::tuple<std::list<Armor>, std::chrono::steady_clock::time_point> MultiThreadDetector::pop()
 {
-  auto [img, t, infer_request] = queue_.pop();
-  infer_request.wait();
-
-  // postprocess
-  auto output_tensor = infer_request.get_output_tensor();
-  auto output_shape = output_tensor.get_shape();
-  cv::Mat output(output_shape[1], output_shape[2], CV_32F, output_tensor.data());
-  auto x_scale = static_cast<double>(640) / img.rows;
-  auto y_scale = static_cast<double>(640) / img.cols;
-  auto scale = std::min(x_scale, y_scale);
-  auto armors = yolo_.postprocess(scale, output, img, 0);  //暂不支持ROI
-
-  return {std::move(armors), t};
+  auto result = out_queue_.pop();
+  return {std::move(result.armors), result.t};
 }
 
 std::tuple<cv::Mat, std::list<Armor>, std::chrono::steady_clock::time_point>
 MultiThreadDetector::debug_pop()
 {
-  auto [img, t, infer_request] = queue_.pop();
-  infer_request.wait();
-
-  // postprocess
-  auto output_tensor = infer_request.get_output_tensor();
-  auto output_shape = output_tensor.get_shape();
-  cv::Mat output(output_shape[1], output_shape[2], CV_32F, output_tensor.data());
-  auto x_scale = static_cast<double>(640) / img.rows;
-  auto y_scale = static_cast<double>(640) / img.cols;
-  auto scale = std::min(x_scale, y_scale);
-  auto armors = yolo_.postprocess(scale, output, img, 0);  //暂不支持ROI
-
-  return {img, std::move(armors), t};
+  auto result = out_queue_.pop();
+  return {result.img, std::move(result.armors), result.t};
 }
 
 }  // namespace multithread

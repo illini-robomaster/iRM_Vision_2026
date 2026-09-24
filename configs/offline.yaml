@@ -26,6 +26,10 @@ device: CPU
 min_confidence: 0.8
 use_traditional: true
 
+#####-----推理后端（新增键，缺失时默认 auto + assets/yolov5_0526.onnx）-----#####
+yolov5_backend: "auto"
+yolov5_onnx_path: "assets/yolov5_0526.onnx"
+
 #####-----ROI-----#####
 roi: 
   x: 420

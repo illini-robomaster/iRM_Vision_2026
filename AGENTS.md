@@ -264,7 +264,26 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 - ⚠️ **参数写法**：本仓库程序用 `cv::CommandLineParser`，短选项必须写 `-c=<path>` / `--config-path=<path>`；写成 `-c <path>`（空格分隔）会被解析成空值，报 `[YAML] Failed to load file: bad file`。
 - `io::USBCamera::open()` 仍强制 `"/dev/" + name` + `cv::CAP_V4L`，**不能**读 `.avi`；读视频请走 `io::Camera` + `camera_name: "video"`。
 
-### 8.5 仍然缺的降级（尚未实现）
+### 8.5 推理后端现状（x86_64 / WSL2 与 Jetson）
+
+- **ONNX 后端（已实现）**：`tasks/auto_aim/yolos/yolov5_onnx.cpp` 用 `cv::dnn` 跑
+  `assets/yolov5_0526.onnx`，`yolo.cpp` 按新增键 `yolov5_backend`（默认 `auto`）分发。
+  预处理/后处理与 `yolos/yolov5.cpp::parse()` 完全一致（见 §4.2），无需 OpenVINO / TensorRT。
+- ⚠️ **OpenCV DNN 版本要求（实测）**：本机 OpenCV 4.5.4 **可以 load 但 `forward()` 会断言失败**
+  （`shape_utils.hpp total()`，模型尾部的 5D `Reshape/Transpose` 不被旧 DNN 支持）；
+  原始 `0526.onnx` 还因为含 `FLOAT16` 张量连 load 都不行（python 的 cv2 5.0 两者都能跑）。
+  已用 `onnx`(1.17, 隔离安装在 /tmp) 生成 FP32 版本 `0526_fp32.onnx`（数值逐位一致）验证：
+  仍是同样的 forward 断言 → **结论是 OpenCV 4.5.x 的 DNN 跑不了这个图**。
+  在 OpenCV ≥ 4.9/5.x 上该后端可用；本机（4.5.4）与 Ubuntu 22.04/24.04 的 `libopencv-dev`
+  （4.5.4/4.6）**不可用**，需要等下一个后端。
+- **下一步（TensorRT / ONNX Runtime）**：Jetson 走 TensorRT（§4.0 装好后在 `yolo.cpp` 加分支）；
+  笔记本若 OpenCV 太旧则走 ONNX Runtime（x86_64/aarch64 都有官方预编译库）。
+  在补上之前，`minimum_vision_system` / `auto_aim_test` / `camera_thread_test` /
+  `usbcamera_detect_test` 虽然能**编译链接**，但运行到检测时会抛异常退出。
+- `multithread/mt_detector` 已去掉 `ov::`（工作线程 + 队列，`push/pop/debug_pop` 接口不变），
+  因此这几个 target 的编译不再依赖 OpenVINO。
+
+### 8.6 仍然缺的降级（尚未实现）
 - `io::Gimbal`：打不开 `/dev/gimbal` 仍会 `exit(1)`（`io/gimbal/gimbal.cpp`）→ `planner_test` / `fire_test` / `gimbal_test` 在笔记本上跑不了（`planner_test_offline` 不受影响）。
 - `uav` / `uav_debug` / `minimum_vision_system` 已接入上述回放键，但在 §4 的 TensorRT 迁移完成前**无法编译**，所以笔记本上的端到端回放要等迁移完成。
 

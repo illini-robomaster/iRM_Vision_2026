@@ -16,12 +16,13 @@ add_library(auto_aim OBJECT
     tracker.cpp
     voter.cpp
     shooter.cpp
-    # yolo.cpp
-    # yolos/yolov5.cpp
+    yolo.cpp                # 后端分发（默认走 ONNX/OpenCV DNN，见 AGENTS.md §4）
+    yolos/yolov5_onnx.cpp   # OpenCV DNN 推理后端（无需 OpenVINO / TensorRT）
+    # yolos/yolov5.cpp      # 原 OpenVINO 版，待 TensorRT 后端替换
     # yolos/yolov8.cpp
     # yolos/yolo11.cpp
     multithread/commandgener.cpp
-    # multithread/mt_detector.cpp
+    multithread/mt_detector.cpp  # 已去掉 ov::（工作线程+队列，对外接口不变）
     planner/planner.cpp
 )
 

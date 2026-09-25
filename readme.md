@@ -266,17 +266,18 @@ sp_vision_25
 cd ~ && git clone git@github.com:illini-robomaster/iRM_Vision_2026.git
 cd iRM_Vision_2026
 
-# ② 一键：装 apt 依赖 + 生成 .vscode/eigen_fix.h + configure + 编译可移植子集
+# ② 一键：装 apt 依赖 + 生成 .vscode/eigen_fix.h + 取 ONNX Runtime + configure + 编译可移植子集
 bash scripts/setup_x86_dev.sh -y
 ```
 
 依赖：`build-essential cmake libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libceres-dev can-utils`（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 里 `find_package(Ceres REQUIRED)` 的必需项）。
 
-**当前可移植的目标子集**（不依赖推理后端，22 个）：
+**当前可移植的目标子集**（不依赖 OpenVINO，26 个）：
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`
+- 可执行（不需要检测）：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`
+- 可执行（端到端检测，需要 3.6.5 的推理后端）：`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`。缺 ONNX Runtime 也能编译链接（后端代码由 `SPVISION_HAS_ORT` 条件编译），只是运行时会回退 `cv::dnn`。
 
-**依赖推理后端、当前编译失败**（属预期状态，TensorRT 迁移完成后恢复）：`uav`、`uav_debug`、`minimum_vision_system`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`、`auto_aim_test`、`camera_detect_test`、`camera_thread_test`、`usbcamera_detect_test`、`detector_video_test`。原因只有两类：缺 `<openvino/openvino.hpp>`，或 `auto_aim::YOLO` 符号未参与编译。
+**仍然编译失败**（`fatal error: openvino/openvino.hpp`，属 AGENTS.md §4.1 待迁移清单，TensorRT 迁移完成后恢复）：`uav`、`uav_debug`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`（`tasks/auto_buff/yolo11_buff.hpp` 链路）、`camera_detect_test`、`detector_video_test`（`tasks/auto_aim/classifier.hpp` ← `detector.hpp` 链路）。这些文件的 `ov::` 依赖尚未替换，**不要**为了让它们“编过”而注释逻辑或加临时桩。
 
 #### 3.6.3 离线回放（无需相机 / IMU / 下位机）
 
@@ -306,7 +307,49 @@ bash scripts/setup_x86_dev.sh -y
 
 #### 3.6.4 CI
 
-`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上述 22 个目标，并冒烟运行 `planner_test_offline`、`camera_test`（视频回放）、`dm_test -p=none`，用于保证 x86_64 这条开发链路不会被改坏。
+`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上面那批可移植目标中**显式列出的 22 个**（库 + 不需要推理后端的可执行），并冒烟运行 `planner_test_offline`、`camera_test`（视频回放）、`dm_test -p=none`，用于保证 x86_64 这条开发链路不会被改坏。
+
+> CI 里不下载 ONNX Runtime（`third_party/` 不入库），所以 `auto_aim_test` / `minimum_vision_system` 这类端到端检测只在本地 / WSL2 覆盖——那里会回退 `cv::dnn`，而 ubuntu-22.04 的 OpenCV 4.5.4 跑不了本模型（见 3.6.5）。需要 CI 也覆盖检测时，先加一步 `bash scripts/fetch_onnxruntime.sh`。
+
+#### 3.6.5 推理后端（ONNX Runtime / cv::dnn）与本地回归
+
+TensorRT 未接入前（AGENTS.md §4.0、§4.1），`auto_aim::YOLO` 按「编译时真的存在」的优先级挑后端，并在启动日志里打印实际选中的后端：
+
+| 优先级 | 后端 | 生效条件 | 备注 |
+|---|---|---|---|
+| 1 | TensorRT | `SPVISION_HAS_TRT` | Jetson 目标后端，**尚未接入**（§4.0 要求先装 TensorRT） |
+| 2 | ONNX Runtime | `SPVISION_HAS_ORT`（CMake 找到 `third_party/onnxruntime`） | x86_64 / WSL2 主力后端 |
+| 3 | OpenCV DNN | `cv::dnn` 能 load **且** forward 能跑本模型 | 兜底，需要 OpenCV ≥ 4.9（4.5.4 会在 5D Reshape 上断言失败） |
+
+三者共用同一套预处理/后处理约定（letterbox、`/255`、BGR→RGB、`col8` 做 sigmoid、关键点顺序、NMS，见 AGENTS.md §4.2），只替换推理调用点。
+
+```bash
+bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（不入库），已存在则跳过
+# 已有 ORT 想复用：cmake -B build -DSPVISION_ORT_ROOT=/path/to/onnxruntime   或   export ORT_DIR=/path/to/onnxruntime
+```
+
+配置键（全是新增键，缺失时有默认值，`configs/*.yaml` 已有键一个都没改）：`yolov5_backend` = `auto`(默认) / `ort` / `onnxruntime` / `onnx_dnn` / `dnn` / `cv_dnn`；`yolov5_ort_path`（默认沿用 `yolov5_onnx_path`，再退到 `assets/yolov5_0526.onnx`）、`yolov5_ort_intra_threads`（默认 0 = 交给 ORT 自己决定）。写成 `openvino` 会直接抛异常（AGENTS.md §0.4）。
+
+一致性实测（`assets/demo/demo.avi` 前 40 帧，逐帧对比关键点/置信度）：ORT **38/40** 帧有检出、共 **38** 个装甲板、最高置信度 **0.968**、平均 **53 ms/帧**；`cv::dnn` 同样是 38/40、38、0.968，平均 125 ms/帧。
+
+一键本地离线回归（不需要相机 / IMU / CAN / 显示器）：
+
+```bash
+bash scripts/run_local_tests.sh            # 跑全部 4 个用例
+bash scripts/run_local_tests.sh 2 4        # 只跑第 2、4 个用例
+LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
+```
+
+| 用例 | 内容 | PASS 判定 |
+|---|---|---|
+| 1 | `planner_test_offline configs/demo.yaml`（纯规划） | 日志含 `Plan Yaw` |
+| 2 | `camera_test -c=configs/offline.yaml`（视频回放取流） | 日志含 `demo.avi` |
+| 3 | `dm_test -p=none`（无 IMU 回放模式） | 日志含 `z0.00 y0.00 x0.00` |
+| 4 | `auto_aim_test -e=60 -c=configs/offline.yaml`（检测+跟踪+规划，60 帧） | 退出码 0 且日志含 `yolo: xx.xms`；无显示环境时自动套 `xvfb-run`，两者都没有则 SKIP |
+
+退出码：`0` = 没有失败（SKIP 不计入失败），`1` = 有用例 FAIL，`2` = 环境不满足（缺 `build/`）。日志默认留在 `/tmp/sp_vision_local_tests/`，FAIL 时脚本会打印日志末尾 15 行。
+
+> 离线回放的既有行为：这份 demo 数据会让 EKF 中途发散，跟踪器会打印 `[Target] r=…, l=…` 与 `[Tracker] Target diverged!`，随后按 `Target::diverged()` 保护丢弃该目标并继续跑，不是回归。
 
 ## 4 轨迹视角下的自瞄理论
 ### 4.1 引言

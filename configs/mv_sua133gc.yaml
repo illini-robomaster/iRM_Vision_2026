@@ -1,0 +1,72 @@
+# =============================================================================
+# 老 USB2.0 相机 MindVision MV-SUA133GC-T1V-C 的配置（接在实机上的第一手验证用）
+#
+# 只服务于「取流 / 检测」这类程序：
+#   ./build/camera_test -c=configs/mv_sua133gc.yaml -d      # 只验取流（帧率直接打在日志里）
+#   ./build/detect_freq_visual_test -c=configs/mv_sua133gc.yaml -m=live -d
+# 端到端主链路（minimum_vision_system / uav）需要标定、planner、cboard 等键，
+# 本文件没有，请用完整配置（configs/demo.yaml 等）再把相机段换成下面这段。
+#
+# 关于 USB2.0（480Mbps）：本机实测（Jetson Orin Nano，相机 f622:0001 SN 043070620316，
+# 走 480M 口/hub）——默认预设 1280x1024、Bayer8 原始数据、frame_speed=1：
+#     1280x1024  ~35.7 fps   0 丢帧      （原始 1.25 MB/帧 ≈ 45 MB/s，USB2.0 已跑满）
+#     1024x768   ~59 fps     0 丢帧
+#     800x600    ~95 fps     0 丢帧
+#     640x480    ~134 fps    0 丢帧
+#     320x240    ~250 fps    0 丢帧
+#   结论：**默认 1280x1024 就能稳定跑 35fps，不需要改分辨率**（改分辨率反而会让标定失效）。
+#   frame_speed 在 1280x1024 下 0/1/2 实测都是 ~35.7fps（瓶颈在 USB 链路，不在 sensor）。
+#   程序启动时会打印：枚举到的设备、分辨率/帧速/输出格式列表、USB 链路速度、单帧原始大小、
+#   带宽估算上限帧率、usbfs 内存上限；关闭时打印采集统计（共/有效/丢帧）。排查就靠这些。
+#   ⚠️ 同一枚相机只能被一个进程打开：CameraInit 返回 -18（设备已经打开）说明上一次的程序
+#      没退干净（被 kill / Ctrl+C 或两个程序同时在跑），pgrep -a 找到后杀掉再试。
+# =============================================================================
+
+#####-----工业相机（MindVision，USB2.0 老相机）-----#####
+camera_name: "mindvision"
+exposure_ms: 2
+gamma: 0.5
+# 本机实测（lsusb -d f622:0001 -v）：MV-SUA133GC，序列号 043070620316，接在 480M 口上
+# ⚠️ 注意：仓库里原来的 configs/camera.yaml 写的是 f622:d13a，与本机这枚相机（f622:0001）不同，
+#    改别的机器前先用 `lsusb` 核对（启动日志也会打印配置的 vid_pid 在总线上是否存在）
+vid_pid: "f622:0001"
+
+# 设备选择（多相机同时插着时用；没写就是第 0 个）
+mv_device_index: 0
+# mv_friendly_name: "MV-SUA133GC"   # 非空时按昵称选，优先于 mv_device_index
+
+# 帧速模式：0 低速 / 1 普通 / 2 高速（USB2.0 带宽不够时改 0）
+mv_frame_speed: 1
+
+# 掉线是否用 libusb 复位重连（默认 true）
+mv_usb_reset: true
+
+# 可选：输出分辨率（默认 -1 = 用相机预设，不要随便改，会失效标定）
+# mv_resolution_width: 1280
+# mv_resolution_height: 1024
+
+# 可选：输出原始格式索引（默认 -1 = 不改，索引见启动日志的「输出格式」列表）
+# mv_media_type: 0
+
+# 可选：数字增益（SDK 设定值，100 = 1.0 倍；默认 -1 = 不改）
+# mv_gain: 100
+
+#####-----神经网络参数（检测用）-----#####
+yolo_name: yolov5
+min_confidence: 0.8
+
+# 实机走 TensorRT；未装 TensorRT 时会明确报错并降级为只测取流/显示（不会静默）
+yolov5_backend: "trt"
+yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
+yolov5_onnx_path: "assets/yolov5_0526.onnx"
+
+use_traditional: false
+
+#####-----ROI-----#####
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false

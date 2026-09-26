@@ -16,10 +16,28 @@ Camera::Camera(const std::string & config_path)
   auto camera_name = tools::read<std::string>(yaml, "camera_name");
 
   if (camera_name == "mindvision") {
-    auto exposure_ms = tools::read<double>(yaml, "exposure_ms");
-    auto gamma = tools::read<double>(yaml, "gamma");
-    auto vid_pid = tools::read<std::string>(yaml, "vid_pid");
-    camera_ = std::make_unique<MindVision>(exposure_ms, gamma, vid_pid);
+    // 前三个键是所有 configs/*.yaml 都有的；后面 mv_* 为新增键（都有默认值），
+    // 主要给老的 USB2.0 相机用，详见 io/mindvision/mindvision.hpp 里的 MindVisionConfig
+    MindVisionConfig config;
+    config.exposure_ms = tools::read<double>(yaml, "exposure_ms");
+    config.gamma = tools::read<double>(yaml, "gamma");
+    config.vid_pid = tools::read<std::string>(yaml, "vid_pid");
+
+    config.device_index = yaml["mv_device_index"] ? yaml["mv_device_index"].as<int>() : 0;
+    config.friendly_name =
+      yaml["mv_friendly_name"] ? yaml["mv_friendly_name"].as<std::string>() : std::string("");
+    config.frame_speed = yaml["mv_frame_speed"] ? yaml["mv_frame_speed"].as<int>() : 1;
+    config.resolution_width =
+      yaml["mv_resolution_width"] ? yaml["mv_resolution_width"].as<int>() : -1;
+    config.resolution_height =
+      yaml["mv_resolution_height"] ? yaml["mv_resolution_height"].as<int>() : -1;
+    config.media_type = yaml["mv_media_type"] ? yaml["mv_media_type"].as<int>() : -1;
+    config.gain = yaml["mv_gain"] ? yaml["mv_gain"].as<double>() : -1.0;
+    config.frame_timeout_ms =
+      yaml["mv_frame_timeout_ms"] ? yaml["mv_frame_timeout_ms"].as<int>() : 1000;
+    config.usb_reset = yaml["mv_usb_reset"] ? yaml["mv_usb_reset"].as<bool>() : true;
+
+    camera_ = std::make_unique<MindVision>(config);
   }
 
   else if (camera_name == "hikrobot") {

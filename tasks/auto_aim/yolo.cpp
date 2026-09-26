@@ -5,13 +5,15 @@
 #include <stdexcept>
 
 #include "yolos/yolov5_onnx.hpp"
+#include "yolos/yolov5_trt.hpp"
 
 // 说明（AGENTS.md §4）：
 //   本文件是 auto_aim::YOLO 的后端分发点。原先这里直接构造 OpenVINO 版
-//   YOLOV5 / YOLOV8 / YOLO11，OpenVINO 在本机不存在且被规则禁用，因此在
-//   TensorRT 迁移完成前改走 OpenCV DNN 的 ONNX 后端（同样只替换推理调用点，
-//   后处理沿用 yolos/yolov5.cpp 的 parse 约定）。
-//   迁移完成后在此处补 TensorRT 后端分支，保持对外接口不变。
+//   YOLOV5 / YOLOV8 / YOLO11，OpenVINO 在本机不存在且被规则禁用，因此改走：
+//     - "onnx_dnn"（= 默认 "auto"）：OpenCV DNN 的 ONNX 后端（不依赖 TensorRT）
+//     - "trt"：TensorRT 后端（Jetson，需按 AGENTS.md §4.0 安装 TensorRT 并离线生成 .engine）
+//   两个后端共用 yolos/yolov5_postprocess.* 的预处理/后处理，行为一致。
+//   对外接口（类名 / 构造签名 / detect 返回类型）与 YAML 已有键均未改动。
 
 namespace auto_aim
 {
@@ -31,6 +33,15 @@ YOLO::YOLO(const std::string & config_path, bool debug)
         "（yolov8/yolo11 待迁移，见 AGENTS.md §4.1）");
     }
     yolo_ = std::make_unique<YOLOV5_ONNX>(config_path, debug);
+  }
+
+  else if (backend == "trt") {
+    if (yolo_name != "yolov5") {
+      throw std::runtime_error(
+        "backend trt 目前只支持 yolo_name=yolov5，当前为: " + yolo_name +
+        "（yolov8/yolo11 待迁移，见 AGENTS.md §4.1）");
+    }
+    yolo_ = std::make_unique<YOLOV5_TRT>(config_path, debug);
   }
 
   else if (backend == "openvino") {

@@ -7,12 +7,13 @@
 
 #include <stdexcept>
 
-#include "tools/img_tools.hpp"
+#include "tasks/auto_aim/yolos/yolov5_postprocess.hpp"
 #include "tools/logger.hpp"
 
 // 说明（AGENTS.md §8.5）：本文件是 cv::dnn 后端（yolov5_onnx.cpp）在推理调用点上的等价替换。
-//   预处理、后处理（parse）与原实现逐行一致，只是把 cv::dnn::Net 换成 ONNX Runtime 的
-//   Ort::Session，并把输入张量按模型实际元素类型（可能是 FP16）喂进去。
+//   预处理 / 后处理**复用** yolos/yolov5_postprocess.*（与 TensorRT、cv::dnn 后端同一份实现），
+//   本文件只保留 ORT 专属部分：Session 构造、输入张量的元素类型（0526.onnx 是 FP16）、
+//   以及输出张量到 cv::Mat 的视图 / 转换。
 namespace auto_aim
 {
 namespace
@@ -86,6 +87,14 @@ YOLOV5_ORT::YOLOV5_ORT(const std::string & config_path, bool debug) : debug_(deb
   }
   input_size_ = cv::Size(net_w, net_h);
 
+  // 共享的 letterbox 固定 640x640（P24-DetectionModel 的输入，AGENTS.md §4.2）。模型若换了
+  // 输入尺寸必须同步改 yolov5_postprocess，否则关键点映射会静默错位 —— 直接拒绝启动。
+  if (input_size_ != cv::Size(640, 640)) {
+    throw std::runtime_error(
+      "[YOLOV5_ORT] 模型输入尺寸 " + std::to_string(net_w) + "x" + std::to_string(net_h) +
+      " 与共享预处理（yolov5_postprocess，固定 640x640）不一致，见 AGENTS.md §4.2");
+  }
+
   tools::logger()->info(
     "[YOLOV5_ORT] {} loaded (ONNX Runtime {}), input={} [1,3,{},{}] {}, output={}", model_path_,
     Ort::GetVersionString(), input_name_, net_h, net_w, fp16_input_ ? "FP16" : "F32", output_name_);
@@ -114,16 +123,10 @@ std::list<Armor> YOLOV5_ORT::detect(const cv::Mat & raw_img, int frame_count)
   const int net_w = input_size_.width;
   const int net_h = input_size_.height;
 
-  auto x_scale = static_cast<double>(net_h) / bgr_img.rows;
-  auto y_scale = static_cast<double>(net_w) / bgr_img.cols;
-  auto scale = std::min(x_scale, y_scale);
-  auto h = static_cast<int>(bgr_img.rows * scale);
-  auto w = static_cast<int>(bgr_img.cols * scale);
-
-  // preprocess：与 yolos/yolov5.cpp 一致（等比缩放 + 左上角贴黑边 + /255 + BGR->RGB）
-  auto input = cv::Mat(net_h, net_w, CV_8UC3, cv::Scalar(0, 0, 0));
-  auto roi = cv::Rect(0, 0, w, h);
-  cv::resize(bgr_img, input(roi), {w, h});
+  // preprocess：复用共享 letterbox（等比缩放 + 左上角贴黑边），与 TensorRT / cv::dnn 后端
+  // 完全同一份实现（AGENTS.md §4.2）
+  double scale = 1.0;
+  auto input = yolov5_post::letterbox(bgr_img, scale);
 
   auto blob = cv::dnn::blobFromImage(input, 1 / 255.0, input_size_, cv::Scalar(), true, false);
 
@@ -180,155 +183,16 @@ std::list<Armor> YOLOV5_ORT::detect(const cv::Mat & raw_img, int frame_count)
 std::list<Armor> YOLOV5_ORT::parse(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
-  // 每一行：4 个关键点(0..7) + 置信度(8，raw logits) + 颜色(9..12) + 编号(13..21)
-  std::vector<int> color_ids, num_ids;
-  std::vector<float> confidences;
-  std::vector<cv::Rect> boxes;
-  std::vector<std::vector<cv::Point2f>> armors_key_points;
-
-  for (int r = 0; r < output.rows; r++) {
-    double score = output.at<float>(r, 8);
-    score = sigmoid(score);
-
-    if (score < score_threshold_) continue;
-
-    std::vector<cv::Point2f> armor_key_points;
-
-    //颜色和类别独热向量
-    cv::Mat color_scores = output.row(r).colRange(9, 13);     //color
-    cv::Mat classes_scores = output.row(r).colRange(13, 22);  //num
-    cv::Point class_id, color_id;
-    int _class_id, _color_id;
-    double score_color, score_num;
-    cv::minMaxLoc(classes_scores, NULL, &score_num, NULL, &class_id);
-    cv::minMaxLoc(color_scores, NULL, &score_color, NULL, &color_id);
-    _class_id = class_id.x;
-    _color_id = color_id.x;
-
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 0) / scale, output.at<float>(r, 1) / scale));
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 6) / scale, output.at<float>(r, 7) / scale));
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 4) / scale, output.at<float>(r, 5) / scale));
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 2) / scale, output.at<float>(r, 3) / scale));
-
-    float min_x = armor_key_points[0].x;
-    float max_x = armor_key_points[0].x;
-    float min_y = armor_key_points[0].y;
-    float max_y = armor_key_points[0].y;
-
-    for (std::size_t i = 1; i < armor_key_points.size(); i++) {
-      if (armor_key_points[i].x < min_x) min_x = armor_key_points[i].x;
-      if (armor_key_points[i].x > max_x) max_x = armor_key_points[i].x;
-      if (armor_key_points[i].y < min_y) min_y = armor_key_points[i].y;
-      if (armor_key_points[i].y > max_y) max_y = armor_key_points[i].y;
-    }
-
-    cv::Rect rect(min_x, min_y, max_x - min_x, max_y - min_y);
-
-    color_ids.emplace_back(_color_id);
-    num_ids.emplace_back(_class_id);
-    boxes.emplace_back(rect);
-    confidences.emplace_back(score);
-    armors_key_points.emplace_back(armor_key_points);
-  }
-
-  std::vector<int> indices;
-  cv::dnn::NMSBoxes(boxes, confidences, score_threshold_, nms_threshold_, indices);
-
-  std::list<Armor> armors;
-  for (const auto & i : indices) {
-    if (use_roi_) {
-      armors.emplace_back(
-        color_ids[i], num_ids[i], confidences[i], boxes[i], armors_key_points[i], offset_);
-    } else {
-      armors.emplace_back(color_ids[i], num_ids[i], confidences[i], boxes[i], armors_key_points[i]);
-    }
-  }
-
-  for (auto it = armors.begin(); it != armors.end();) {
-    if (!check_name(*it)) {
-      it = armors.erase(it);
-      continue;
-    }
-
-    if (!check_type(*it)) {
-      it = armors.erase(it);
-      continue;
-    }
-
-    // 注：原 OpenVINO 版在此处用传统方法二次矫正角点（use_traditional），依赖尚未迁移的
-    // auto_aim::Detector / Classifier，本后端跳过（见头文件说明）
-    it->center_norm = get_center_norm(bgr_img, it->center);
-    ++it;
-  }
-
-  if (debug_) draw_detections(bgr_img, armors, frame_count);
-
-  return armors;
+  // 后处理统一走共享实现（sigmoid 置信度 -> 阈值 -> argmax 颜色/编号 -> NMS -> 名称/类型
+  // 过滤 -> center_norm），与 TensorRT / cv::dnn 后端逐行一致（AGENTS.md §4.1.4 / §4.2）
+  return yolov5_post::parse(
+    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_);
 }
 
 std::list<Armor> YOLOV5_ORT::postprocess(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
   return parse(scale, output, bgr_img, frame_count);
-}
-
-bool YOLOV5_ORT::check_name(const Armor & armor) const
-{
-  auto name_ok = armor.name != ArmorName::not_armor;
-  auto confidence_ok = armor.confidence > min_confidence_;
-
-  return name_ok && confidence_ok;
-}
-
-bool YOLOV5_ORT::check_type(const Armor & armor) const
-{
-  auto name_ok = (armor.type == ArmorType::small)
-                   ? (armor.name != ArmorName::one && armor.name != ArmorName::base)
-                   : (armor.name != ArmorName::two && armor.name != ArmorName::sentry &&
-                      armor.name != ArmorName::outpost);
-
-  return name_ok;
-}
-
-cv::Point2f YOLOV5_ORT::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center) const
-{
-  auto h = bgr_img.rows;
-  auto w = bgr_img.cols;
-  return {center.x / w, center.y / h};
-}
-
-void YOLOV5_ORT::draw_detections(
-  const cv::Mat & img, const std::list<Armor> & armors, int frame_count) const
-{
-  auto detection = img.clone();
-  tools::draw_text(detection, fmt::format("[{}]", frame_count), {10, 30}, {255, 255, 255});
-  for (const auto & armor : armors) {
-    auto info = fmt::format(
-      "{:.2f} {} {} {}", armor.confidence, COLORS[armor.color], ARMOR_NAMES[armor.name],
-      ARMOR_TYPES[armor.type]);
-    tools::draw_points(detection, armor.points, {0, 255, 0});
-    tools::draw_text(detection, info, armor.center, {0, 255, 0});
-  }
-
-  if (use_roi_) {
-    cv::Scalar green(0, 255, 0);
-    cv::rectangle(detection, roi_, green, 2);
-  }
-  cv::resize(detection, detection, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
-  cv::imshow("detection", detection);
-  cv::waitKey(1);
-}
-
-double YOLOV5_ORT::sigmoid(double x)
-{
-  if (x > 0)
-    return 1.0 / (1.0 + exp(-x));
-  else
-    return exp(x) / (1.0 + exp(x));
 }
 
 }  // namespace auto_aim

@@ -5,11 +5,14 @@
 #   "video"      -> assets/demo/demo.avi 回放（默认，无需相机）
 #   "mindvision" -> MindVision 工业相机（MV-SUA133GC-T1V-C，见 configs/mv_sua133gc.yaml）
 #
-# 推理后端由 yolov5_backend 决定：
-#   "auto" / "onnx_dnn" -> OpenCV DNN 跑 assets/yolov5_0526.onnx（需 OpenCV >= 4.9 / 5.x）
-#   "trt"               -> TensorRT 跑离线生成的 .engine（Jetson；先按 AGENTS.md §4.0 装 TensorRT）
-#   ⚠️ 本机（Jetson，OpenCV 4.5.4）用 "auto" 会在 forward() 失败；TensorRT 未装时 "trt" 会在
-#      构造时抛异常。两种情况测试程序都会打印原因并降级为「只测取流/显示」，不会静默退化。
+# 推理后端由 yolov5_backend 决定（AGENTS.md §8.5）：
+#   "auto"                  -> 按编译期可用性选 TensorRT → ONNX Runtime → OpenCV DNN
+#   "trt"                   -> TensorRT 跑离线生成的 .engine（Jetson；先按 AGENTS.md §4.0 装 TensorRT）
+#   "ort" / "onnxruntime"   -> ONNX Runtime 跑 assets/yolov5_0526.onnx（x86_64 / WSL2 主力）
+#   "onnx_dnn" / "dnn"      -> OpenCV DNN 跑同一个 onnx（需 OpenCV >= 4.9 / 5.x）
+#   ⚠️ OpenCV 4.5.x 的 DNN 会在 forward() 断言失败；TensorRT 未装 / 没生成 .engine 时 "auto" 会
+#      warn 后回退下一个后端，显式写 "trt" 则直接抛异常（都不静默出错误结果）。
+#      ORT 需要先 `bash scripts/fetch_onnxruntime.sh`（不入库），否则该后端不参与编译。
 #
 # 用法（本仓库用 cv::CommandLineParser，短选项必须写成 -c=<path>，空格分隔会被解析成空）：
 #   ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=replay -n=300 -d

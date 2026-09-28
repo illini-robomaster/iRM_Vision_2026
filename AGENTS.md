@@ -287,16 +287,18 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   分发；引擎路径用新增键 `yolov5_trt_engine_path`（默认 `assets/yolov5_0526_fp16.engine`）。
   本机没装 TensorRT 时构造函数抛明确异常（不静默退化），头文件不含 `<NvInfer.h>`（PIMPL）。
 - **共享预处理/后处理**：`yolos/yolov5_postprocess.{hpp,cpp}` 是 letterbox / sigmoid / parse /
-  NMS / check_name / center_norm 的**唯一实现**，ONNX 与 TensorRT 两个后端都调它，避免行为漂移
-  （§4.1.4 的一致性对比就是对比它）。
+  NMS / check_name / center_norm 的**唯一实现**，`cv::dnn` / TensorRT / ONNX Runtime **三个**后端
+  都调它，避免行为漂移（§4.1.4 的一致性对比就是对比它）；ORT 侧只保留 Session 构造与
+  FP16/FP32 张量转换。
 - **ONNX Runtime 后端（已实现，x86_64 / WSL2 主力）**：`tasks/auto_aim/yolos/yolov5_ort.{hpp,cpp}`，
   依赖 `third_party/onnxruntime`（`scripts/fetch_onnxruntime.sh` 下载，**不入库**），CMake 找到后定义
   `SPVISION_HAS_ORT`；`yolo.cpp` 在 `auto` 下按 TRT → ORT → `cv::dnn` 选后端，启动日志打印真实选中的
-  那个。实测（`assets/demo/demo.avi` 前 40 帧逐帧对比）：ORT **38/40** 帧有检出、共 38 个装甲板、
-  最高置信度 **0.968**、平均 **53 ms/帧**；`cv::dnn` 同为 38/40 / 38 / 0.968，平均 125 ms/帧。
-- **仍然待补**：① 把 ORT 后处理重构为直接复用 `yolov5_postprocess.*`（一致性用
-  `detect_freq_visual_test -dump=csv` 逐帧对比）；② Jetson 侧 TensorRT 端到端回放（需按 §4.0 装
-  TensorRT 并离线生成 `.engine`）。
+  那个。实测（`-dump=csv` 逐帧对比，本机 WSL2 / OpenCV 4.10.0 + ORT 1.17.3，`assets/demo/demo.avi`
+  前 40 帧）：ORT **38/40** 帧有检出、最高置信度 **0.968**、平均 **40.5 ms/帧**（p95 47.4）；
+  `cv::dnn` 同为 38/40 / 0.968、平均 **46.5 ms/帧**（p95 66.3）；两后端逐帧装甲板数量与
+  颜色/编号/类型标签**完全一致**，最大置信度差 **5.8e-5**、最大关键点像素差 **0.07 px**。
+- **仍然待补**：Jetson 侧 TensorRT 端到端回放（需按 §4.0 装 TensorRT 并离线生成 `.engine`）；
+  ORT 复用共享后处理已完成（三个后端现在只有推理调用点不同）。
 - `multithread/mt_detector` 已去掉 `ov::`（工作线程 + 队列，`push/pop/debug_pop` 接口不变），
   因此这几个 target 的编译不再依赖 OpenVINO。
 

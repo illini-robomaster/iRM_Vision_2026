@@ -4,8 +4,9 @@
 // ONNX Runtime 推理后端（x86_64 开发机 / WSL2 的主力检测后端，见 AGENTS.md §8.5）。
 //
 // 与 cv::dnn 后端（yolov5_onnx.hpp）的关系：
-//   letterbox、/255、BGR->RGB、关键点顺序、NMS、置信度 sigmoid 全部沿用同一份约定
-//   （AGENTS.md §4.2），只替换推理调用点：cv::dnn Net -> Ort::Session。
+//   预处理 / 后处理**直接复用** yolos/yolov5_postprocess.{hpp,cpp}（letterbox、/255、
+//   BGR->RGB、关键点顺序、NMS、置信度 sigmoid、名称/类型过滤、center_norm 的唯一实现，
+//   AGENTS.md §4.2），只替换推理调用点：cv::dnn Net -> Ort::Session。
 //   动机：OpenCV < 4.9 的 DNN 跑不了本模型（尾部 5D Reshape/Transpose 断言失败），
 //   而 assets/yolov5_0526.onnx 的输入是 FP16，ORT 能原样吃下。
 //
@@ -52,9 +53,6 @@ private:
   std::string model_path_;
   bool debug_, use_roi_;
 
-  const int class_num_ = 13;
-  const float nms_threshold_ = 0.3;
-  const float score_threshold_ = 0.7;
   double min_confidence_;
 
   cv::Rect roi_;
@@ -66,15 +64,9 @@ private:
   cv::Size input_size_;  // 模型输入尺寸（本模型固定 640x640）
   bool fp16_input_;      // 输入张量元素类型是否为 FP16（0526.onnx 是）
 
-  bool check_name(const Armor & armor) const;
-  bool check_type(const Armor & armor) const;
-
-  cv::Point2f get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center) const;
-
+  // 预处理 / 后处理不在本类实现：统一走 yolos/yolov5_postprocess.*（与 TensorRT / cv::dnn
+  // 后端共用同一份 letterbox / parse，避免行为漂移，见 AGENTS.md §4.1.4）。
   std::list<Armor> parse(double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count);
-
-  void draw_detections(const cv::Mat & img, const std::list<Armor> & armors, int frame_count) const;
-  double sigmoid(double x);
 };
 
 }  // namespace auto_aim

@@ -321,7 +321,7 @@ bash scripts/setup_x86_dev.sh -y
 | 2 | ONNX Runtime | `SPVISION_HAS_ORT`（CMake 找到 `third_party/onnxruntime`） | x86_64 / WSL2 主力后端 |
 | 3 | OpenCV DNN | `cv::dnn` 能 load **且** forward 能跑本模型 | 兜底，需要 OpenCV ≥ 4.9（4.5.4 会在 5D Reshape 上断言失败） |
 
-TensorRT 与 OpenCV DNN **共用**同一套预处理/后处理实现 `tasks/auto_aim/yolos/yolov5_postprocess.{hpp,cpp}`（letterbox、`/255`、BGR→RGB、`col8` 做 sigmoid、关键点顺序、NMS、名称/类型过滤、center_norm 的唯一实现，避免行为漂移）；ONNX Runtime 后端按同一套约定实现（AGENTS.md §4.2 的一致性对比就是对比它），后续会重构为直接复用同一实现。
+TensorRT、ONNX Runtime 与 OpenCV DNN **共用**同一套预处理/后处理实现 `tasks/auto_aim/yolos/yolov5_postprocess.{hpp,cpp}`（letterbox、`/255`、BGR→RGB、`col8` 做 sigmoid、关键点顺序、NMS、名称/类型过滤、center_norm 的唯一实现，避免行为漂移）——三个后端只保留「推理调用点」的差异（AGENTS.md §4.2 的一致性对比就是对比它）。
 
 ```bash
 bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（不入库），已存在则跳过
@@ -330,7 +330,7 @@ bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（�
 
 配置键（全是新增键，缺失时有默认值，`configs/*.yaml` 已有键一个都没改）：`yolov5_backend` = `auto`(默认) / `trt` / `tensorrt` / `ort` / `onnxruntime` / `onnx_dnn` / `dnn` / `cv_dnn`；`yolov5_ort_path`（默认沿用 `yolov5_onnx_path`，再退到 `assets/yolov5_0526.onnx`）、`yolov5_ort_intra_threads`（默认 0 = 交给 ORT 自己决定）、`yolov5_trt_engine_path`（默认 `assets/yolov5_0526_fp16.engine`）。写成 `openvino` 会直接抛异常（AGENTS.md §0.4）。
 
-一致性实测（`assets/demo/demo.avi` 前 40 帧，逐帧对比关键点/置信度）：ORT **38/40** 帧有检出、共 **38** 个装甲板、最高置信度 **0.968**、平均 **53 ms/帧**；`cv::dnn` 同样是 38/40、38、0.968，平均 125 ms/帧。
+一致性实测（`-dump=csv` 逐帧对比，本机 WSL2 / x86_64 + OpenCV 4.10.0 + ONNX Runtime 1.17.3，`assets/demo/demo.avi` 前 40 帧）：ORT 与 `cv::dnn` 都是 **38/40** 帧有检出、共 **38** 个装甲板、最高置信度 **0.968**，逐帧装甲板数量与颜色/编号/类型标签**完全一致**，最大置信度差 **5.8e-5**、最大关键点像素差 **0.07 px**；平均耗时 ORT **40.5 ms/帧**（p95 47.4 ms）、`cv::dnn` **46.5 ms/帧**（p95 66.3 ms）。（更早一版按各自实现跑出来的数字是 53 / 125 ms 量级，已随 ORT 改为复用共享后处理而统一。）
 
 一键本地离线回归（不需要相机 / IMU / CAN / 显示器）：
 

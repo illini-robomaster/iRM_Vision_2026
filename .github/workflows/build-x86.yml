@@ -41,7 +41,8 @@ jobs:
             fire_test gimbal_test gimbal_response_test handeye_test \
             capture split_video \
             calibrate_camera calibrate_handeye calibrate_robotworld_handeye \
-            detect_freq_visual_test
+            detect_freq_visual_test \
+            camera_detect_test detector_video_test uav_debug
 
       - name: Smoke test (planner_test_offline replay)
         run: |

@@ -31,9 +31,7 @@ YOLOV5_ONNX::YOLOV5_ONNX(const std::string & config_path, bool debug) : debug_(d
   offset_ = cv::Point2f(x, y);
 
   if (yaml["use_traditional"] && yaml["use_traditional"].as<bool>()) {
-    tools::logger()->warn(
-      "[YOLOV5_ONNX] use_traditional=true 暂不支持：传统方法依赖 auto_aim::Detector/Classifier，"
-      "尚未迁移（AGENTS.md §4.1）；本后端只使用网络输出的关键点");
+    configure_traditional(config_path, "YOLOV5_ONNX");
   }
 
   net_ = cv::dnn::readNetFromONNX(model_path_);
@@ -84,7 +82,8 @@ std::list<Armor> YOLOV5_ONNX::parse(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
   return yolov5_post::parse(
-    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_);
+    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_,
+    traditional());
 }
 
 std::list<Armor> YOLOV5_ONNX::postprocess(

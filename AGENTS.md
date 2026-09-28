@@ -123,14 +123,22 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
 ### 4.1 迁移要求
 - 本机**没有任何 OpenVINO 运行时**，所有推理必须面向 CUDA / TensorRT（TensorRT `.engine` / `.plan`，或自写 CUDA kernel）。
 - **待迁移清单**（现有 OpenVINO 代码，不要新增同类代码）：
-  - `tasks/auto_aim/yolos/yolov5.{cpp,hpp}`
+  - `tasks/auto_aim/yolos/yolov5.{cpp,hpp}`（原 OpenVINO 版；在 `tasks/auto_aim/CMakeLists.txt` 里注释着、不参与编译，能力已由 `yolov5_postprocess` + 三个后端文件覆盖）
   - `tasks/auto_aim/yolos/yolov8.{cpp,hpp}`
   - `tasks/auto_aim/yolos/yolo11.{cpp,hpp}`
-  - `tasks/auto_aim/classifier.{cpp,hpp}`
-  - `tasks/auto_aim/multithread/mt_detector.{cpp,hpp}`
   - `tasks/auto_buff/yolo11_buff.{cpp,hpp}`
   - 上述文件中的 `ov::Core`、`ov::CompiledModel`、`core_.read_model()`、`compile_model()` 需替换为 TensorRT 封装。
-  - 现状：`tasks/auto_aim/CMakeLists.txt` 已把 `classifier.cpp`、`detector.cpp`、`yolo.cpp`、`yolos/*.cpp`、`multithread/mt_detector.cpp` 注释掉（未参与编译）；但 `tasks/auto_buff/CMakeLists.txt` **仍在编译 `yolo11_buff.cpp`**，且 `buff_detector.hpp` / `buff_target.hpp` / `buff_aimer.hpp` 都直接 `#include "yolo11_buff.hpp"`，因此 `auto_buff` 目标当前**编译失败**——这是预期状态，不是回归。迁移时需同步放开上述源文件并接上 TensorRT；在此之前改动这些文件不会有完整编译反馈。
+  - **已迁移（不再含 `ov::` / `openvino.hpp`）**：`tasks/auto_aim/classifier.{cpp,hpp}`（删掉 `ov::Core` / `ov::CompiledModel` 成员与 `ovclassify()`，只留 `cv::dnn` 分类器）、`tasks/auto_aim/detector.{cpp,hpp}`、`tasks/auto_aim/multithread/mt_detector.{cpp,hpp}`，以及 `yolo.cpp` / `yolos/yolov5*`（共享后处理 + ONNX Runtime / OpenCV DNN / TensorRT 三个后端，见 §8.5）。
+  - 现状：全量 `make -C build/ -k` 现在**只剩一个失败构建单元 `auto_buff`**，唯一报错是
+    `tasks/auto_buff/yolo11_buff.hpp:7:10: fatal error: openvino/openvino.hpp: No such file or directory`
+    （`buff_detector.hpp` / `buff_target.hpp` / `buff_aimer.hpp` 都直接 `#include "yolo11_buff.hpp"`）；
+    可执行 `uav` 链接 `auto_buff` 因此也编不过。这是预期状态，不是回归——这两个目标之外的代码已有完整编译反馈。
+  - `use_traditional`（Detector + Classifier 二次矫正角点）已随迁移恢复：`YOLOBase::configure_traditional()`
+    （`yolo.{hpp,cpp}`）持有 `std::unique_ptr<Detector>`，`yolos/yolov5_postprocess.cpp::parse()` 在
+    `center_norm` 之前对每个存活检出调用 `traditional->detect(armor, bgr_img)`（与原 OpenVINO 版
+    `yolov5.cpp` 的顺序一致），ONNX Runtime / OpenCV DNN / TensorRT 三个后端都已接上。启用后需要
+    `configs/*.yaml` 里有传统方法那组键（`threshold` / `max_angle_error` / `min_lightbar_ratio` / …）
+    与 `classify_model`，缺失时构造抛带后端名的异常，**不会静默退化成“矫正没生效”**。
 - 迁移硬约束：
   1. **对外接口与类名不变**：`auto_aim::YOLO` / `YOLOV5` / `YOLOV8` / `YOLO11` 的构造签名
      `(const std::string & config_path, bool debug = false)` 与 `detect(...)` 返回类型保持不变。
@@ -185,11 +193,11 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
 ```bash
 make -C build/ <target> -j$(nproc)
 ```
-`build/` 已配置的目标（ROS 未启用时约 80 个）。按实测（v1.1，在 Jetson 上以 `make -C build/ -k` 全量验证）分成两类：
+`build/` 已配置的目标（ROS 未启用时约 80 个）。按实测（v1.2，x86_64 / WSL2 上以 `make -C build/ -k` 全量验证，与 Jetson 同一份代码）分成两类：
 
-- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`、`detect_freq_visual_test`（§8.7）；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
+- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`、`detect_freq_visual_test`（§8.7）、`camera_detect_test`、`detector_video_test`、`uav_debug`；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
 - **能编译链接、运行到检测才需要推理后端**（x86_64 / WSL2，取决于 `SPVISION_HAS_ORT`）：`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`。缺 ONNX Runtime 时会回退 `cv::dnn`，而 OpenCV < 4.9 的 `forward()` 会断言失败（§8.5）。
-- **当前编译失败（依赖尚未迁移的 OpenVINO 代码，属预期状态，见 §4.1）**：`uav`、`uav_debug`（`classifier.hpp` ← `detector.hpp`）、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`（`auto_buff/yolo11_buff.hpp`）、`camera_detect_test`、`detector_video_test`（`classifier.hpp`）。原因只有一类：`#include <openvino/openvino.hpp>`。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成迁移后再放开。
+- **当前编译失败（只剩 `auto_buff` 一条链路，属预期状态，见 §4.1）**：`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`（`auto_buff/yolo11_buff.hpp`），以及链接 `auto_buff` 的 `uav`。报错只有一类：`fatal error: openvino/openvino.hpp`。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成迁移后再放开。
 
 - **不要**默认执行 `make -C build/` 全量编译；先编译受影响的最小 target。
 - 仅在必要时 `cmake -B build`；**不要删除 `build/`**（重新全量编译成本高）。
@@ -247,10 +255,10 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 
 ### 8.3 当前可移植目标子集
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（§8.7）
+- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（§8.7）、`camera_detect_test`、`detector_video_test`、`uav_debug`
 - 端到端检测目标（`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`）能编译链接，**运行到检测时**需要可用后端（ORT 就位即真正跑，见 §8.5）。
-- 仍然无法编译的目标（依赖未迁移的 `classifier.hpp` / `auto_buff/yolo11_buff.hpp`）：见 §6.1。
-- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述 23 个目标，并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）、`camera_test -c=configs/offline.yaml`、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`。
+- 仍然无法编译的只剩 `auto_buff` / `auto_buff_test` / `auto_buff_debug_mpc` / `uav`（未迁移的 `auto_buff/yolo11_buff.hpp`）：见 §6.1。`classifier` / `detector` 在本轮（v1.2）已迁移完成——`camera_detect_test`、`detector_video_test`、`uav_debug` 从“编译失败”转为可编译。
+- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述 26 个目标（含新增的 `camera_detect_test` / `detector_video_test` / `uav_debug`），并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）、`camera_test -c=configs/offline.yaml`、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`。
 
 ### 8.4 离线回放（已实现，x86_64 / WSL2 可用）
 
@@ -297,6 +305,19 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   前 40 帧）：ORT **38/40** 帧有检出、最高置信度 **0.968**、平均 **40.5 ms/帧**（p95 47.4）；
   `cv::dnn` 同为 38/40 / 0.968、平均 **46.5 ms/帧**（p95 66.3）；两后端逐帧装甲板数量与
   颜色/编号/类型标签**完全一致**，最大置信度差 **5.8e-5**、最大关键点像素差 **0.07 px**。
+- **Classifier / Detector 已迁移（v1.2）**：`classifier.{cpp,hpp}` 删掉了 `ov::Core` / `ov::CompiledModel`
+  成员与 `ovclassify()`，只留 `cv::dnn`（`classify_model`，默认 `assets/tiny_resnet.onnx`）；
+  `detector.{cpp,hpp}` 不再 include OpenVINO 头，只做编译期适配（`<numeric>` / `<ctime>`、
+  `fmt::format`、`strftime`、`ARMOR_NAMES[...]` 查名）。因此 `use_traditional` 可以恢复：
+  `YOLOBase::configure_traditional()`（`yolo.{hpp,cpp}`）+ `yolov5_postprocess::parse(..., Detector *)`。
+  实测：`configs/offline.yaml` 本身就是 `use_traditional: true` + 全套传统方法键，因此本地回归的
+  **用例 4（`auto_aim_test -e=60 -c=configs/offline.yaml`，检测→跟踪→规划 60 帧）已是这条路径的端到端验证**，
+  日志首行即 `[YOLOV5_ORT] use_traditional=true：已启用传统方法二次矫正角点（Detector+Classifier…）`。
+  另用 `configs/detect_freq.yaml` 派生 `use_traditional: true` 单测（WSL2 / ORT / `assets/demo/demo.avi`）：
+  bench 20 帧 `detect` 平均 **32.01 ms**（关掉时 40 帧为 **31.94 ms**）、退出码 0、18 个装甲板；用临时计数日志
+  （验证后已删除）确认 `Detector::detect(Armor&, img)` 恰好被调用 **18** 次 = 检出数。这份 demo 视频
+  的画面过不了传统方法的几何检查（`detect()` 返回 false），所以角点与关掉时逐帧一致
+  （`-dump=csv` 两份完全相同）——这是原实现的行为（矫正不成立就保留网络关键点），不是“没接上”。
 - **仍然待补**：Jetson 侧 TensorRT 端到端回放（需按 §4.0 装 TensorRT 并离线生成 `.engine`）；
   ORT 复用共享后处理已完成（三个后端现在只有推理调用点不同）。
 - `multithread/mt_detector` 已去掉 `ov::`（工作线程 + 队列，`push/pop/debug_pop` 接口不变），
@@ -304,7 +325,7 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 
 ### 8.6 仍然缺的降级（尚未实现）
 - `io::Gimbal`：打不开 `/dev/gimbal` 仍会 `exit(1)`（`io/gimbal/gimbal.cpp`）→ `planner_test` / `fire_test` / `gimbal_test` 在笔记本上跑不了（`planner_test_offline` 不受影响）。
-- `uav` / `uav_debug` 已接入上述回放键，但依赖尚未迁移的 `classifier.hpp`（OpenVINO），仍**无法编译**；笔记本上的端到端回放走 `minimum_vision_system` / `auto_aim_test`（ORT 就位即真正跑检测，见 §8.5）。
+- `uav_debug` 已接入上述回放键，且随 `classifier` / `detector` 迁移完成（v1.2）已能编译；`uav` 仍因链接未迁移的 `auto_buff` 而编不过，所以笔记本上的端到端回放走 `minimum_vision_system` / `auto_aim_test`（ORT 就位即真正跑检测，见 §8.5）。
 
 ### 8.7 检测频率可视化测试 + MindVision USB2.0 相机（新增）
 

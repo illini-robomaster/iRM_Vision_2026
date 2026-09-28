@@ -57,9 +57,7 @@ YOLOV5_ORT::YOLOV5_ORT(const std::string & config_path, bool debug) : debug_(deb
   offset_ = cv::Point2f(x, y);
 
   if (yaml["use_traditional"] && yaml["use_traditional"].as<bool>()) {
-    tools::logger()->warn(
-      "[YOLOV5_ORT] use_traditional=true 暂不支持：传统方法依赖 auto_aim::Detector/Classifier，"
-      "尚未迁移（AGENTS.md §4.1）；本后端只使用网络输出的关键点");
+    configure_traditional(config_path, "YOLOV5_ORT");
   }
 
   Ort::SessionOptions options;
@@ -184,9 +182,11 @@ std::list<Armor> YOLOV5_ORT::parse(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
   // 后处理统一走共享实现（sigmoid 置信度 -> 阈值 -> argmax 颜色/编号 -> NMS -> 名称/类型
-  // 过滤 -> center_norm），与 TensorRT / cv::dnn 后端逐行一致（AGENTS.md §4.1.4 / §4.2）
+  // 过滤 -> use_traditional 的二次矫正 -> center_norm），与 TensorRT / cv::dnn 后端逐行一致
+  // （AGENTS.md §4.1.4 / §4.2）
   return yolov5_post::parse(
-    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_);
+    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_,
+    traditional());
 }
 
 std::list<Armor> YOLOV5_ORT::postprocess(

@@ -26,6 +26,7 @@ video_loop: true
 video_frame_rate: 0 # 0 = 用视频文件自带帧率；想对照别的取流节奏可改成 30 / 60
 
 #####-----神经网络参数-----#####
+classify_model: assets/tiny_resnet.onnx # 传统方法（use_traditional=true）用的数字分类器
 yolo_name: yolov5
 min_confidence: 0.8
 
@@ -34,8 +35,22 @@ yolov5_onnx_path: "assets/yolov5_0526.onnx"
 # backend=trt 时使用；离线由 trtexec --fp16 生成，.engine 不入库（AGENTS.md §4.0）
 yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
 
-# 传统方法依赖尚未迁移的 Detector/Classifier，本测试路径不使用（AGENTS.md §4.1）
+# 传统方法二次矫正角点（Detector + Classifier，三个后端都支持）：
+#   false -> 只用网络关键点；true -> 每个检出再用传统方法矫正一次角点（detect 耗时约 +1/3）
+# 改成 true 时，下面「传统方法参数」那段键必须存在，否则 Detector 构造会抛异常
+# （yolo.cpp 的 configure_traditional 会给出带后端名的明确报错）
 use_traditional: false
+
+#####-----传统方法（Detector/Classifier）参数（与 configs/demo.yaml 同值）-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
 
 #####-----ROI-----#####
 roi:

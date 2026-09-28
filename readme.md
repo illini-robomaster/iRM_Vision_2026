@@ -272,12 +272,12 @@ bash scripts/setup_x86_dev.sh -y
 
 依赖：`build-essential cmake libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libceres-dev can-utils`（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 里 `find_package(Ceres REQUIRED)` 的必需项）。
 
-**当前可移植的目标子集**（不依赖 OpenVINO，27 个）：
+**当前可移植的目标子集**（不依赖 OpenVINO，30 个）：
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行（不需要检测）：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（见 3.6.6）
+- 可执行（不需要检测）：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（见 3.6.6）、`camera_detect_test`、`detector_video_test`、`uav_debug`
 - 可执行（端到端检测，需要 3.6.5 的推理后端）：`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`。缺 ONNX Runtime 也能编译链接（后端代码由 `SPVISION_HAS_ORT` 条件编译），只是运行时会回退 `cv::dnn`。
 
-**仍然编译失败**（`fatal error: openvino/openvino.hpp`，属 AGENTS.md §4.1 待迁移清单，TensorRT 迁移完成后恢复）：`uav`、`uav_debug`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`（`tasks/auto_buff/yolo11_buff.hpp` 链路）、`camera_detect_test`、`detector_video_test`（`tasks/auto_aim/classifier.hpp` ← `detector.hpp` 链路）。这些文件的 `ov::` 依赖尚未替换，**不要**为了让它们“编过”而注释逻辑或加临时桩。
+**仍然编译失败**（`fatal error: openvino/openvino.hpp`，属 AGENTS.md §4.1 待迁移清单，TensorRT 迁移完成后恢复）：只剩 `tasks/auto_buff/yolo11_buff.hpp` 一条链路——`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`，以及链接 `auto_buff` 的 `uav`。`classifier` / `detector` 已完成去 OpenVINO，因此 `camera_detect_test`、`detector_video_test`、`uav_debug` 现在都能编；`use_traditional`（传统方法二次矫正）也随之恢复（见 3.6.5）。**不要**为了让上面这几个目标“编过”而注释逻辑或加临时桩。
 
 #### 3.6.3 离线回放（无需相机 / IMU / 下位机）
 
@@ -307,7 +307,7 @@ bash scripts/setup_x86_dev.sh -y
 
 #### 3.6.4 CI
 
-`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上面那批可移植目标中**显式列出的 23 个**（库 + 不需要推理后端的可执行，含 `detect_freq_visual_test`），并冒烟运行 `planner_test_offline`（纯规划）、`camera_test -c=configs/offline.yaml`（视频回放取流）、`dm_test -p=none`（无 IMU 回放）、`detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=30 -no-yolo`（只测取流/显示，不依赖 DNN 版本），用于保证 x86_64 这条开发链路不会被改坏。
+`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上面那批可移植目标中**显式列出的 26 个**（库 + 不需要推理后端的可执行，含 `detect_freq_visual_test`、`camera_detect_test`、`detector_video_test`、`uav_debug`），并冒烟运行 `planner_test_offline`（纯规划）、`camera_test -c=configs/offline.yaml`（视频回放取流）、`dm_test -p=none`（无 IMU 回放）、`detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=30 -no-yolo`（只测取流/显示，不依赖 DNN 版本），用于保证 x86_64 这条开发链路不会被改坏。
 
 > CI 里不下载 ONNX Runtime（`third_party/` 不入库），所以 `auto_aim_test` / `minimum_vision_system` 这类端到端检测只在本地 / WSL2 覆盖——那里会回退 `cv::dnn`，而 ubuntu-22.04 的 OpenCV 4.5.4 跑不了本模型（见 3.6.5）。需要 CI 也覆盖检测时，先加一步 `bash scripts/fetch_onnxruntime.sh`。
 
@@ -321,7 +321,11 @@ bash scripts/setup_x86_dev.sh -y
 | 2 | ONNX Runtime | `SPVISION_HAS_ORT`（CMake 找到 `third_party/onnxruntime`） | x86_64 / WSL2 主力后端 |
 | 3 | OpenCV DNN | `cv::dnn` 能 load **且** forward 能跑本模型 | 兜底，需要 OpenCV ≥ 4.9（4.5.4 会在 5D Reshape 上断言失败） |
 
-TensorRT、ONNX Runtime 与 OpenCV DNN **共用**同一套预处理/后处理实现 `tasks/auto_aim/yolos/yolov5_postprocess.{hpp,cpp}`（letterbox、`/255`、BGR→RGB、`col8` 做 sigmoid、关键点顺序、NMS、名称/类型过滤、center_norm 的唯一实现，避免行为漂移）——三个后端只保留「推理调用点」的差异（AGENTS.md §4.2 的一致性对比就是对比它）。
+TensorRT、ONNX Runtime 与 OpenCV DNN **共用**同一套预处理/后处理实现 `tasks/auto_aim/yolos/yolov5_postprocess.{hpp,cpp}`（letterbox、`/255`、BGR→RGB、`col8` 做 sigmoid、关键点顺序、NMS、名称/类型过滤、center_norm 的唯一实现，避免行为漂移）——三个后端只保留「推理调用点」的差异（AGENTS.md §4.2 的一致性对比就是对比它）。它同时还承载 `use_traditional` 的传统方法二次矫正：`parse()` 接一个可空的 `Detector *`，非空时在 `center_norm` 之前对每个存活检出调用 `traditional->detect(armor, bgr_img)`（与原 OpenVINO 版 `yolov5.cpp` 的顺序一致）。
+
+**传统方法二次矫正（`use_traditional`，随 classifier/detector 去 OpenVINO 恢复）**：`classifier.{cpp,hpp}` 的 `ov::Core` / `ov::CompiledModel` / `ovclassify()` 已删除（只留 `cv::dnn` + `classify_model`，默认 `assets/tiny_resnet.onnx`），`detector.{cpp,hpp}` 不再 include OpenVINO 头，因此 `auto_aim::YOLOBase::configure_traditional()`（`yolo.{hpp,cpp}`）能重新持有 `std::unique_ptr<Detector>`。三个后端都调它，所以 `yolov5_backend` 取任何值都支持 `use_traditional: true`；启用时 yaml 里必须有传统方法那组键（`threshold` / `max_angle_error` / `min_lightbar_ratio` / `max_lightbar_ratio` / `min_lightbar_length` / `min_armor_ratio` / `max_armor_ratio` / `max_side_ratio` / `max_rectangular_error`）与 `classify_model`，缺失时构造抛带后端名的异常，不会静默退化。
+
+实测：`configs/offline.yaml` 里本来就是 `use_traditional: true` + 全套传统方法键，所以本地回归的**用例 4（`auto_aim_test -e=60 -c=configs/offline.yaml`，检测→跟踪→规划 60 帧）本身就是这条路径的端到端验证**，日志首行即 `[YOLOV5_ORT] use_traditional=true：已启用传统方法二次矫正角点（Detector+Classifier…）`。单独用 `configs/detect_freq.yaml` 派生 `use_traditional: true` 再测（本机 WSL2 / ORT 1.17.3 / `assets/demo/demo.avi`）：bench 20 帧 `detect` 平均 **32.01 ms**（关掉时 40 帧 **31.94 ms**）、退出码 0、共 18 个装甲板。用临时计数日志（验证后已删除）确认 `Detector::detect(Armor&, img)` 恰好被调用 **18** 次 = 检出数；这份 demo 视频的画面过不了传统方法的几何检查，`detect()` 返回 false（保留网络关键点），所以 `-dump=csv` 两份逐帧完全一致——这是原实现行为，不是“没接上”。
 
 ```bash
 bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（不入库），已存在则跳过
@@ -335,7 +339,7 @@ bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（�
 一键本地离线回归（不需要相机 / IMU / CAN / 显示器）：
 
 ```bash
-bash scripts/run_local_tests.sh            # 跑全部 5 个用例
+bash scripts/run_local_tests.sh            # 跑全部 6 个用例
 bash scripts/run_local_tests.sh 2 4        # 只跑第 2、4 个用例
 LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 ```
@@ -347,6 +351,7 @@ LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 | 3 | `dm_test -p=none`（无 IMU 回放模式） | 日志含 `z0.00 y0.00 x0.00` |
 | 4 | `auto_aim_test -e=60 -c=configs/offline.yaml`（检测+跟踪+规划，60 帧） | 退出码 0 且日志含 `yolo: xx.xms`；无显示环境时自动套 `xvfb-run`，两者都没有则 SKIP |
 | 5 | `detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=40`（检测频率/阶段耗时） | 日志含 `detect…avg`；先探一帧，本机没有任何可用推理后端（TensorRT / ONNX Runtime / OpenCV ≥ 4.9）时 SKIP 而不是 FAIL（`bench` 模式不开窗口，不需要显示环境） |
+| 6 | `detect_freq_visual_test -c=<临时派生 use_traditional: true 的配置> -m=bench -n=20`（传统方法二次矫正 Detector+Classifier） | 日志含 `use_traditional=true`（后端打印的启用消息）；配置由脚本 `sed` 从 `configs/detect_freq.yaml` 现场派生（不新增配置文件），同样先探一帧、缺推理后端时 SKIP |
 
 退出码：`0` = 没有失败（SKIP 不计入失败），`1` = 有用例 FAIL，`2` = 环境不满足（缺 `build/`）。日志默认留在 `/tmp/sp_vision_local_tests/`，FAIL 时脚本会打印日志末尾 15 行。
 

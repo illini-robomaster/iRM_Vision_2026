@@ -8,8 +8,8 @@ add_subdirectory(planner/tinympc)
 
 add_library(auto_aim OBJECT 
     armor.cpp
-    # classifier.cpp 
-    # detector.cpp
+    classifier.cpp          # 已去掉 ov::（只留 cv::dnn 路径），AGENTS.md §4.1
+    detector.cpp            # 传统方法检测，依赖 Classifier；ov:: 随 classifier 头文件去掉
     solver.cpp
     aimer.cpp
     target.cpp

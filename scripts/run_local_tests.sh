@@ -7,6 +7,7 @@
 #   3) dm_test               无 IMU 回放模式自检（-p=none）
 #   4) auto_aim_test         端到端回放：检测（ONNX Runtime / cv::dnn）+ 跟踪 + 规划（需显示环境）
 #   5) detect_freq_visual_test  检测链路的阶段性耗时 / 频率（cap/pre/detect/draw，bench 模式不需显示）
+#   6) detect_freq_visual_test  传统方法二次矫正（use_traditional=true，Detector+Classifier）走通
 #
 # 用法：
 #   bash scripts/run_local_tests.sh          # 跑全部
@@ -151,6 +152,28 @@ else
   else
     run_case 5 "detect_freq_visual_test：检测频率与阶段耗时（bench 40 帧）" 120 'detect.*avg' \
       "${DF_BIN}" "${DF_BIN}" -c=configs/detect_freq.yaml -m=bench -n=40
+  fi
+fi
+
+# 6) 传统方法二次矫正（yaml 的 use_traditional=true）：YOLO 后端里再挂一个 Detector+Classifier，
+#    对每个检出做传统方法矫正。覆盖的是「classifier/detector 去 OpenVINO 之后是否真的能在
+#    推理后端里跑起来」这条链路（AGENTS.md §4.1），配置用第 5 条改一行派生（不新增配置文件）。
+if [ ! -x "${DF_BIN}" ]; then
+  skip 6 "detect_freq_visual_test：传统方法二次矫正（use_traditional=true）" \
+    "缺少 ${DF_BIN}，先跑 bash scripts/setup_x86_dev.sh -y"
+else
+  TRAD_YAML="${LOG_DIR}/6_detect_traditional.yaml"
+  sed 's/^use_traditional: false/use_traditional: true/' configs/detect_freq.yaml >"${TRAD_YAML}"
+  if ! grep -q '^use_traditional: true' "${TRAD_YAML}"; then
+    skip 6 "detect_freq_visual_test：传统方法二次矫正（use_traditional=true）" \
+      "configs/detect_freq.yaml 里没有再出现 use_traditional: false，派生配置失败"
+  elif ! timeout -s INT 30 "${DF_BIN}" -c="${TRAD_YAML}" -m=bench -n=1 \
+      >"${LOG_DIR}/6_probe.log" 2>&1 || ! grep -Eq 'backend=' "${LOG_DIR}/6_probe.log"; then
+    skip 6 "detect_freq_visual_test：传统方法二次矫正（use_traditional=true）" \
+      "本机没有可用推理后端（TensorRT / ONNX Runtime / OpenCV >= 4.9 都没有），见 AGENTS.md §8.5"
+  else
+    run_case 6 "detect_freq_visual_test：传统方法二次矫正（Detector+Classifier，bench 20 帧）" 120 \
+      'use_traditional=true' "${DF_BIN}" "${DF_BIN}" -c="${TRAD_YAML}" -m=bench -n=20
   fi
 fi
 

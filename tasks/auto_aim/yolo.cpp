@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "detector.hpp"
 #include "tools/logger.hpp"
 #include "yolos/yolov5_onnx.hpp"
 #include "yolos/yolov5_trt.hpp"
@@ -27,6 +28,30 @@
 
 namespace auto_aim
 {
+void YOLOBase::configure_traditional(
+  const std::string & config_path, const std::string & backend_name)
+{
+  auto yaml = YAML::LoadFile(config_path);
+  if (!(yaml["use_traditional"] && yaml["use_traditional"].as<bool>())) return;
+
+  try {
+    // debug=false：与原 OpenVINO 版 yolos/yolov5.cpp 的 detector_(config_path, false) 一致，
+    // 避免 Detector 自己再开一个显示窗口
+    traditional_ = std::make_unique<Detector>(config_path, false);
+  } catch (const std::exception & e) {
+    throw std::runtime_error(
+      "[" + backend_name +
+      "] use_traditional=true 但构造 Detector/Classifier 失败: " + e.what() +
+      "（传统方法需要 threshold / max_angle_error / min_lightbar_* / max_armor_ratio 等键，"
+      "见 configs/*.yaml；只想用网络关键点时把 use_traditional 设为 false）");
+  }
+
+  tools::logger()->info(
+    "[{}] use_traditional=true：已启用传统方法二次矫正角点（Detector+Classifier，原 OpenVINO "
+    "版的行为，AGENTS.md §4.1）",
+    backend_name);
+}
+
 YOLO::YOLO(const std::string & config_path, bool debug)
 {
   auto yaml = YAML::LoadFile(config_path);

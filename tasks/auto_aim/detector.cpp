@@ -1,9 +1,11 @@
 #include "detector.hpp"
 
-#include <fmt/chrono.h>
+#include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 
+#include <ctime>
 #include <filesystem>
+#include <numeric>
 
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
@@ -346,8 +348,15 @@ cv::Point2f Detector::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f
 
 void Detector::save(const Armor & armor) const
 {
-  auto file_name = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
-  auto img_path = fmt::format("{}/{}_{}.jpg", save_path_, armor.name, file_name);
+  // 时间戳统一用 strftime（AGENTS.md §3.1：本仓库基线是 fmt 6.1.2，没有 chrono formatter）
+  auto now = std::chrono::system_clock::now();
+  std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+  std::tm now_tm = *std::localtime(&now_c);
+  char time_buf[64];
+  std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%M-%S", &now_tm);
+
+  // armor.name 是枚举，不能直接交给 fmt（会编译失败，AGENTS.md §2.3/§3.2），按名称查表
+  auto img_path = fmt::format("{}/{}_{}.jpg", save_path_, ARMOR_NAMES[armor.name], time_buf);
   cv::imwrite(img_path, armor.pattern);
 }
 

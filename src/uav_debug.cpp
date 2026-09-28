@@ -16,6 +16,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/recorder.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ? |                  | 输出命令行参数说明}"
@@ -34,7 +35,19 @@ int main(int argc, char * argv[])
 
   tools::Exiter exiter;
   tools::Plotter plotter;
-  tools::Recorder recorder;
+
+  // 录制开关（新增可选键，默认 false，缺键时行为与之前完全一致）：
+  //   record_video: true -> 相机帧 + 当时云台姿态落到 records/<时间>.avi|txt（tools::Recorder）
+  // 录制是「真机跑一段 -> 离线回放复现」的入口，avi 可直接作为 camera_name: "video" 的
+  // video_path 回放（见 scripts/replay_ab.sh）。records/ 已被 .gitignore 忽略。
+  auto cfg = tools::load(config_path);
+  auto record_video = tools::optional_bool(cfg, "record_video", false);
+  auto record_fps = tools::optional_double(cfg, "record_fps", 30.0);
+  if (record_video)
+    tools::logger()->info("record_video=true：录制到 records/（avi + 人机姿态 txt，fps 上限 {:.1f}）",
+                          record_fps);
+
+  tools::Recorder recorder(record_fps);
 
   io::Camera camera(config_path);
   io::CBoard cboard(config_path);
@@ -59,7 +72,7 @@ int main(int argc, char * argv[])
     camera.read(img, t);
     q = cboard.imu_at(t - 1ms);
     mode = cboard.mode;
-    // recorder.record(img, q, t);
+    if (record_video) recorder.record(img, q, t);
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);
       last_mode = mode;

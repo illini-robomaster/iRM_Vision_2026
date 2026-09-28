@@ -14,6 +14,7 @@
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
+#include "tools/recorder.hpp"
 #include "tools/yaml.hpp"
 
 const std::string keys =
@@ -35,8 +36,21 @@ int main(int argc, char * argv[])
   auto yaml = tools::load(config_path);
   auto imu_name = yaml["imu_name"] ? yaml["imu_name"].as<std::string>() : std::string("/dev/ttyACM0");
 
+  // 录制开关（新增可选键，默认 false，缺键时行为与之前完全一致）：
+  //   record_video: true -> 相机帧 + 当时姿态落到 records/<时间>.avi|txt（tools::Recorder）
+  // 台架用（不需要 CBoard/can0）：录到的 avi 可直接作为 camera_name: "video" 的 video_path
+  // 离线回放，用 scripts/replay_ab.sh 做同一段真机画面上的 A/B。records/ 已被 .gitignore 忽略。
+  auto record_video = tools::optional_bool(yaml, "record_video", false);
+  auto record_fps = tools::optional_double(yaml, "record_fps", 30.0);
+  if (record_video)
+    tools::logger()->info(
+      "record_video=true：录制到 records/（avi + 姿态 txt，fps 上限 {:.1f}；imu_name={} 时 txt "
+      "里的姿态无意义，产物取 avi）",
+      record_fps, imu_name);
+
   tools::Exiter exiter;
   tools::Plotter plotter;
+  tools::Recorder recorder(record_fps);
   io::Camera camera(config_path);
   io::DM_IMU dm_imu(imu_name);
 
@@ -63,6 +77,8 @@ int main(int argc, char * argv[])
     auto [img, armors, t] = detector.debug_pop();
 
     Eigen::Quaterniond q = dm_imu.imu_at(t);
+
+    if (record_video) recorder.record(img, q, t);
 
     solver.set_R_gimbal2world(q);
 

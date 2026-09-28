@@ -52,6 +52,16 @@ max_armor_ratio: 5
 max_side_ratio: 1.5
 max_rectangular_error: 25 # degree
 
+#####-----录制（新增键，默认 false：不录制，行为与之前完全一致）-----#####
+# record_video: true  -> 把相机帧录成 records/<时间>.avi（tools::Recorder，MJPEG；records/ 不入库），
+#                        以便之后派生一份 camera_name: "video" + video_path: records/xxx.avi 的配置回放，
+#                        用 scripts/replay_ab.sh 做「同一段真机画面」上的 A/B。
+# record_fps           -> 落盘帧率上限（默认 30），实际录制按取流节奏抽帧，不改变处理链路。
+# 本程序没有人机姿态来源：txt 里的人机四元数是单位四元数（无意义），产物只取 avi。
+# 真机全链路录制（带真实姿态）请用 uav_debug / minimum_vision_system，它们读同一组键。
+record_video: false
+record_fps: 30
+
 #####-----ROI-----#####
 roi:
   x: 420

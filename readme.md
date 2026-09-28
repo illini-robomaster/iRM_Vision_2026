@@ -335,7 +335,7 @@ bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（�
 一键本地离线回归（不需要相机 / IMU / CAN / 显示器）：
 
 ```bash
-bash scripts/run_local_tests.sh            # 跑全部 4 个用例
+bash scripts/run_local_tests.sh            # 跑全部 5 个用例
 bash scripts/run_local_tests.sh 2 4        # 只跑第 2、4 个用例
 LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 ```
@@ -346,6 +346,7 @@ LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 | 2 | `camera_test -c=configs/offline.yaml`（视频回放取流） | 日志含 `demo.avi` |
 | 3 | `dm_test -p=none`（无 IMU 回放模式） | 日志含 `z0.00 y0.00 x0.00` |
 | 4 | `auto_aim_test -e=60 -c=configs/offline.yaml`（检测+跟踪+规划，60 帧） | 退出码 0 且日志含 `yolo: xx.xms`；无显示环境时自动套 `xvfb-run`，两者都没有则 SKIP |
+| 5 | `detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=40`（检测频率/阶段耗时） | 日志含 `detect…avg`；先探一帧，本机没有任何可用推理后端（TensorRT / ONNX Runtime / OpenCV ≥ 4.9）时 SKIP 而不是 FAIL（`bench` 模式不开窗口，不需要显示环境） |
 
 退出码：`0` = 没有失败（SKIP 不计入失败），`1` = 有用例 FAIL，`2` = 环境不满足（缺 `build/`）。日志默认留在 `/tmp/sp_vision_local_tests/`，FAIL 时脚本会打印日志末尾 15 行。
 

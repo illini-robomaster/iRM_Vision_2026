@@ -6,6 +6,7 @@
 #   2) camera_test           视频文件回放取流（configs/offline.yaml）
 #   3) dm_test               无 IMU 回放模式自检（-p=none）
 #   4) auto_aim_test         端到端回放：检测（ONNX Runtime / cv::dnn）+ 跟踪 + 规划（需显示环境）
+#   5) detect_freq_visual_test  检测链路的阶段性耗时 / 频率（cap/pre/detect/draw，bench 模式不需显示）
 #
 # 用法：
 #   bash scripts/run_local_tests.sh          # 跑全部
@@ -131,6 +132,26 @@ if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! command -v xvfb-r
 else
   run_case 4 "auto_aim_test：端到端回放（检测+跟踪+规划，60 帧）" 120 'yolo: [0-9.]+ms' \
     "${AA_BIN}" "${AA_CMD[@]}"
+fi
+
+# 5) 检测链路的阶段性耗时：cap（取流）/ pre（letterbox）/ detect（模型全链路）/ draw，
+#    -m=bench 不开窗口，所以连显示环境都不需要。需要任一可用推理后端
+#    （TensorRT / ONNX Runtime / OpenCV >= 4.9 的 DNN，见 AGENTS.md §8.5）：三个都没有时
+#    程序会降级成「只测取流」（这是它的设计，不是失败），这里按 SKIP 处理并说明原因。
+DF_BIN=./build/detect_freq_visual_test
+if [ ! -x "${DF_BIN}" ]; then
+  skip 5 "detect_freq_visual_test：检测频率与阶段耗时（bench）" \
+    "缺少 ${DF_BIN}，先跑 bash scripts/setup_x86_dev.sh -y"
+else
+  # 先探一帧：只有真的选中了后端（日志出现 backend=）才认为本机可测
+  if ! timeout -s INT 30 "${DF_BIN}" -c=configs/detect_freq.yaml -m=bench -n=1 \
+      >"${LOG_DIR}/5_probe.log" 2>&1 || ! grep -Eq 'backend=' "${LOG_DIR}/5_probe.log"; then
+    skip 5 "detect_freq_visual_test：检测频率与阶段耗时（bench）" \
+      "本机没有可用推理后端（TensorRT / ONNX Runtime / OpenCV >= 4.9 都没有），见 AGENTS.md §8.5"
+  else
+    run_case 5 "detect_freq_visual_test：检测频率与阶段耗时（bench 40 帧）" 120 'detect.*avg' \
+      "${DF_BIN}" "${DF_BIN}" -c=configs/detect_freq.yaml -m=bench -n=40
+  fi
 fi
 
 # ---------------------------------------------------------------- 汇总

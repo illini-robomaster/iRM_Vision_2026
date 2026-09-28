@@ -15,6 +15,8 @@
 | 0.3 | 用 fmt 直接格式化 `std::chrono` 时间对象：`fmt::format("{:%Y-%m-%d}", std::chrono::system_clock::now())` | 见 §3.1：`strftime` 格式化到 `char[]`，再交给 `fmt::format` |
 | 0.4 | 引入或恢复 OpenVINO 运行时依赖：`ov::`、`core_.read_model()`、`compile_model()`、`find_package(OpenVINO REQUIRED)` | 见 §4：推理后端只能是 CUDA / TensorRT |
 | 0.5 | 为绕过编译错误而重写 `Armor` / `Solver` / EKF / TinyMPC 的上层算法逻辑 | 只做 API/类型适配，排错顺序见 §6.3 |
+| 0.6 | 干完活不提交 / 不推送；或把 `build/`、`logs/`、`third_party/`、`.vscode/`、`*.engine\|*.plan\|*.trt` 等产物混进提交 | 见 §9：每个可验证的工作单元一次聚焦 commit，并 `git push origin main` |
+| 0.7 | 对 `main` 做 `push --force` / `--force-with-lease`；rebase 已推送的提交；`reset --hard` 丢掉他人提交 | 见 §9.3：分叉先 `git fetch` 看清，默认 merge |
 
 ## 1. 环境与版本基线
 
@@ -214,6 +216,7 @@ make -C build/ <target> -j$(nproc)
 - [ ] 无 `{{...}}` 初始化，矩阵/向量均为“先声明尺寸 + `<<`”（§0.2、§2.1）
 - [ ] 无 fmt 直接格式化 chrono，时间戳走 `strftime`（§0.3、§3.1）
 - [ ] 无新增/恢复 OpenVINO 依赖，推理走 CUDA / TensorRT（§0.4、§4）
+- [ ] 已按 §9 提交并推送，且回复中给出本地 / 远程 SHA 一致的证据（§9.3、§9.5）
 
 ## 8. 笔记本 / x86_64 开发机（Jetson 不在手上时）
 
@@ -288,4 +291,63 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 - `uav` / `uav_debug` / `minimum_vision_system` 已接入上述回放键，但在 §4 的 TensorRT 迁移完成前**无法编译**，所以笔记本上的端到端回放要等迁移完成。
 
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
+
+## 9. Git 提交与推送规则（交付即提交）
+
+> 与 §0.6 / §0.7、§6.2、§7 配套：**验证通过 → 提交 → 推送 → 报告 SHA** 是本仓库每轮任务的固定收尾动作，
+> 不要把未提交的改动留给用户手动处理。
+
+### 9.1 触发时机：一个工作单元一次提交
+- 一个「工作单元」= 一次可验证的改动：修一个 bug / 加一个后端 / 加一个测试或脚本 / 更新一处文档。
+- 判据：`make -C build/ <受影响 target> -j$(nproc)` 通过（§6.2）；涉及 x86 可移植目标时，优先再跑一次
+  `bash scripts/run_local_tests.sh`。
+- **同一轮回复内**完成 commit + push；不要攒批，不要以「等会儿一起提」为由留下改动。任务结束时
+  `git status` 必须是 `nothing to commit, working tree clean`（只剩被 `.gitignore` 忽略的文件）。
+
+### 9.2 提交（commit）
+- 提交前复核：`git status` + `git --no-pager diff --stat`，确认没有 `build/`、`logs/`、`third_party/`、
+  `.vscode/`、`*.engine` / `*.plan` / `*.trt` 等产物混入（§0.6）。用**指定路径** `git add`，不要
+  `git add -A` 盲加。
+- **身份必须先配好**（实测 local / global / system 三处都可能为空，不配则 commit 直接失败）：
+  ```bash
+  git config user.name  "koerimikan"
+  git config user.email "104670756+koerimikan@users.noreply.github.com"   # 与推送账号一致
+  ```
+  临时用 `git -c user.name=... -c user.email=... commit` 也算合规，但优先配置到仓库。
+- 信息格式（沿用本仓库既有实践）：首行 `<type>(<scope>): <中文摘要>`，`type` ∈
+  `feat|fix|port|build|test|docs|refactor|chore`，`scope` 用模块名（`yolo` / `io` / `tools` / `scripts` /
+  `agents` …），摘要 ≤ 60 字；禁止 `update` / `fix bug` 之类无信息量标题。
+- 正文写清「改了什么 / 为什么 / **实测命令与结果**」，数字必须是真跑出来的（与 §6.2 同一要求）；
+  跨平台影响（Jetson / x86_64）要写明。
+- 一次提交只解决一个问题，diff 保持可审阅（§6.4）；不要把无关的格式化 / 重排混进来。
+
+### 9.3 推送（push）与分叉处理
+- 提交后立即 `git push origin main`（本仓库唯一长期分支，未启用 PR 流程）。
+- 被拒 / 远程有新提交时，**先看清再动手**：
+  ```bash
+  git fetch origin
+  git --no-pager log --oneline --left-right --graph main...origin/main
+  ```
+  - **默认策略：merge**（`git pull --no-rebase origin main`）——保留双方历史，冲突只解一遍；
+  - 仅当本地提交**尚未推送**、且明确要求线性历史时，才用 `git rebase origin/main`；
+  - **已推送的提交一律 merge，禁止 rebase**。
+- 解冲突用定点编辑（§6.4，禁止 `sed -i` / 脚本批量替换）；解完**必须重新执行 §6.2 的编译 / 运行验证**，
+  再提交（合并结果也是一次聚焦提交）并 push。
+- **禁止** `git push --force` / `--force-with-lease` 到 `main`；**禁止** `git reset --hard` 丢掉他人提交；
+  未经确认不得 `git clean -fd`。
+- push 后自检并汇报证据：`git --no-pager log --oneline -1 origin/main` 与本地 HEAD **SHA 一致**。
+
+### 9.4 仓库卫生
+- 不提交：`build/`、`third_party/`（由 `scripts/fetch_onnxruntime.sh` 按机器下载）、`logs/`、`.vscode/`
+  （含 `eigen_fix.h`，§2.3 要求不提交也不删除）、`*.engine` / `*.plan` / `*.trt`、`records*/`、
+  `CMakeCache.txt`、`compile_commands.json`。
+- 大文件（模型 / 引擎 / 视频）不新增；`assets/` 现有权重只在必要时更新，并在提交正文里写明来源与 md5
+  （§4.2；仓库保持 private）。
+- 需要暂存不完整的工作时用 `git stash`（留在本地），不要把半成品提交到 `main`。
+
+### 9.5 与其它章节的关系
+- §9.1 是 §7 自检清单的收尾项：§7 全部通过才算一个可提交的工作单元，commit + push 完成后该单元才算交付。
+- 与 §6.4「编辑纪律」一致：解冲突 / 合并同样使用定点编辑。
+- §0.6 / §0.7 是本节的硬约束版本：违反即视为无效输出。
+
 - [ ] `make -C build/ <target> -j$(nproc)` 实际编译通过（§6.1、§6.2）

@@ -2,11 +2,13 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
 #include "tools/logger.hpp"
 #include "yolos/yolov5_onnx.hpp"
+#include "yolos/yolov5_trt.hpp"
 
 #ifdef SPVISION_HAS_ORT
 #include "yolos/yolov5_ort.hpp"
@@ -15,11 +17,13 @@
 // 说明（AGENTS.md §4、§8.5）：
 //   本文件是 auto_aim::YOLO 的后端分发点。原先这里直接构造 OpenVINO 版
 //   YOLOV5 / YOLOV8 / YOLO11；OpenVINO 在本机不存在且被规则禁用（§0.4），因此按
-//   下面的优先级挑选「编译时真的存在」的后端（谁存在由 CMake 的编译定义决定）：
-//     1) TensorRT    —— Jetson 目标后端，本仓库尚未接入（§4.0 / §4.1）
+//   下面的优先级挑选「真的可用」的后端（编译期存在性由 CMake 的编译定义决定）：
+//     1) TensorRT    —— Jetson 目标后端（HAVE_TENSORRT，见 §4.0）
 //     2) ONNX Runtime—— x86_64 / WSL2 主力后端（SPVISION_HAS_ORT，见 §8.5）
-//     3) OpenCV DNN  —— 兜底后端，需要 OpenCV >= 4.9
-//   三者共用同一个 parse 约定（§4.2），只替换推理调用点，对外接口不变。
+//     3) OpenCV DNN  —— 兜底后端，需要 OpenCV >= 4.9（§8.5）
+//   TensorRT 与 OpenCV DNN 共用 yolos/yolov5_postprocess.* 的 letterbox/parse（唯一实现，
+//   避免漂移）；ORT 后端沿用同一套约定（§4.2）。只替换推理调用点，对外接口（类名 /
+//   构造签名 / detect 返回类型）与 YAML 已有键均未改动。
 
 namespace auto_aim
 {
@@ -35,7 +39,7 @@ YOLO::YOLO(const std::string & config_path, bool debug)
   if (backend == "openvino") {
     throw std::runtime_error(
       "yolov5_backend=openvino 已不可用：本机没有 OpenVINO 且禁止引入（AGENTS.md §0.4），"
-      "请用 auto / ort / onnx_dnn");
+      "请用 auto / trt / ort / onnx_dnn");
   }
 
   const bool want_trt = backend == "auto" || backend == "tensorrt" || backend == "trt";
@@ -53,11 +57,37 @@ YOLO::YOLO(const std::string & config_path, bool debug)
       "（yolov8/yolo11 待迁移，见 AGENTS.md §4.1）");
   }
 
-  // 1) TensorRT：迁移完成前只有提示，随后自动回退到下一个可用后端
+  // 1) TensorRT —— Jetson 目标后端
+  //    显式 trt：交给后端自己处理（没装 TensorRT / 没生成 .engine 时抛清晰异常，不静默退化）
+  //    auto：只有「编译期有 TensorRT + 运行期 .engine 真的在」才选它，否则回退下一个后端，
+  //          避免 Jetson 上还没离线生成 .engine 时整条链路直接抛异常
+#ifdef HAVE_TENSORRT
+  if (want_trt) {
+    auto engine_path = yaml["yolov5_trt_engine_path"]
+                         ? yaml["yolov5_trt_engine_path"].as<std::string>()
+                         : std::string("assets/yolov5_0526_fp16.engine");
+    if (backend != "auto" || std::filesystem::exists(engine_path)) {
+      yolo_ = std::make_unique<YOLOV5_TRT>(config_path, debug);
+      tools::logger()->info("[YOLO] backend=tensorrt (yolov5_backend={})", backend);
+      return;
+    }
+    tools::logger()->warn(
+      "[YOLO] 未找到 TensorRT 引擎 {}（先用 trtexec --fp16 离线生成，见 AGENTS.md §4.0），"
+      "自动回退到下一个可用后端",
+      engine_path);
+  }
+#else
+  if (backend == "trt" || backend == "tensorrt") {
+    // 显式指定：交给 YOLOV5_TRT 抛出「本机未编译 TensorRT 后端」的清晰异常，不静默退化
+    yolo_ = std::make_unique<YOLOV5_TRT>(config_path, debug);
+    return;
+  }
   if (want_trt) {
     tools::logger()->warn(
-      "[YOLO] TensorRT 后端尚未接入（AGENTS.md §4.0/§4.1），自动回退到下一个可用后端");
+      "[YOLO] 本机未编译 TensorRT 后端（CMake 未找到 libnvinfer，见 AGENTS.md §4.0），"
+      "自动回退到下一个可用后端");
   }
+#endif
 
   // 2) ONNX Runtime
 #ifdef SPVISION_HAS_ORT

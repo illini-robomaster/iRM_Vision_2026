@@ -187,8 +187,9 @@ make -C build/ <target> -j$(nproc)
 ```
 `build/` 已配置的目标（ROS 未启用时约 80 个）。按实测（v1.1，在 Jetson 上以 `make -C build/ -k` 全量验证）分成两类：
 
-- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
-- **当前编译失败（依赖推理后端，属预期状态，见 §4）**：`uav`、`uav_debug`、`minimum_vision_system`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`、`auto_aim_test`、`camera_detect_test`、`camera_thread_test`、`usbcamera_detect_test`、`detector_video_test`。原因只有两类：缺 `<openvino/openvino.hpp>`（来自 `classifier.hpp` / `yolos/*.hpp` / `multithread/mt_detector.hpp` / `auto_buff/yolo11_buff.hpp`），或 `auto_aim::YOLO` 符号未参与编译。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成 TensorRT 迁移后再放开。
+- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`、`detect_freq_visual_test`（§8.7）；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
+- **能编译链接、运行到检测才需要推理后端**（x86_64 / WSL2，取决于 `SPVISION_HAS_ORT`）：`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`。缺 ONNX Runtime 时会回退 `cv::dnn`，而 OpenCV < 4.9 的 `forward()` 会断言失败（§8.5）。
+- **当前编译失败（依赖尚未迁移的 OpenVINO 代码，属预期状态，见 §4.1）**：`uav`、`uav_debug`（`classifier.hpp` ← `detector.hpp`）、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`（`auto_buff/yolo11_buff.hpp`）、`camera_detect_test`、`detector_video_test`（`classifier.hpp`）。原因只有一类：`#include <openvino/openvino.hpp>`。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成迁移后再放开。
 
 - **不要**默认执行 `make -C build/` 全量编译；先编译受影响的最小 target。
 - 仅在必要时 `cmake -B build`；**不要删除 `build/`**（重新全量编译成本高）。
@@ -242,13 +243,14 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 该脚本会：
 1. `apt install` OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann-json / libusb-1.0 / Ceres（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 的 `find_package(Ceres REQUIRED)` 必需项）；
 2. 本地生成 `.vscode/eigen_fix.h`（`.vscode/` 被 `.gitignore` 忽略，且 §2.3 要求不提交，所以每台机器都要生成）；
-3. 编译「不依赖推理后端」的目标子集。
+3. 编译可移植目标子集（含端到端检测目标；`third_party/onnxruntime` 就位时自动启用 ORT 后端）。
 
 ### 8.3 当前可移植目标子集
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`
-- 依赖推理后端、当前无法编译的目标：见 §6.1（预期状态）。
-- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述子集，并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）。
+- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（§8.7）
+- 端到端检测目标（`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`）能编译链接，**运行到检测时**需要可用后端（ORT 就位即真正跑，见 §8.5）。
+- 仍然无法编译的目标（依赖未迁移的 `classifier.hpp` / `auto_buff/yolo11_buff.hpp`）：见 §6.1。
+- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述 23 个目标，并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）、`camera_test -c=configs/offline.yaml`、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`。
 
 ### 8.4 离线回放（已实现，x86_64 / WSL2 可用）
 
@@ -269,7 +271,7 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 
 ### 8.5 推理后端现状（x86_64 / WSL2 与 Jetson）
 
-- **ONNX 后端（已实现）**：`tasks/auto_aim/yolos/yolov5_onnx.cpp` 用 `cv::dnn` 跑
+- **OpenCV DNN 后端（兜底，已实现）**：`tasks/auto_aim/yolos/yolov5_onnx.cpp` 用 `cv::dnn` 跑
   `assets/yolov5_0526.onnx`，`yolo.cpp` 按新增键 `yolov5_backend`（默认 `auto`）分发。
   预处理/后处理与 `yolos/yolov5.cpp::parse()` 完全一致（见 §4.2），无需 OpenVINO / TensorRT。
 - ⚠️ **OpenCV DNN 版本要求（实测）**：本机 OpenCV 4.5.4 **可以 load 但 `forward()` 会断言失败**
@@ -278,17 +280,65 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   已用 `onnx`(1.17, 隔离安装在 /tmp) 生成 FP32 版本 `0526_fp32.onnx`（数值逐位一致）验证：
   仍是同样的 forward 断言 → **结论是 OpenCV 4.5.x 的 DNN 跑不了这个图**。
   在 OpenCV ≥ 4.9/5.x 上该后端可用；本机（4.5.4）与 Ubuntu 22.04/24.04 的 `libopencv-dev`
-  （4.5.4/4.6）**不可用**，需要等下一个后端。
-- **下一步（TensorRT / ONNX Runtime）**：Jetson 走 TensorRT（§4.0 装好后在 `yolo.cpp` 加分支）；
-  笔记本若 OpenCV 太旧则走 ONNX Runtime（x86_64/aarch64 都有官方预编译库）。
-  在补上之前，`minimum_vision_system` / `auto_aim_test` / `camera_thread_test` /
-  `usbcamera_detect_test` 虽然能**编译链接**，但运行到检测时会抛异常退出。
+  （4.5.4/4.6）**不可用**，需要 ORT 或 TensorRT 顶上；本机当前 WSL 实测 OpenCV **4.10.0**，
+  此版本 `cv::dnn` 与 ORT 都能跑。
+- **TensorRT 后端（已实现，等 §4.0 装 TensorRT 才能编）**：`tasks/auto_aim/yolos/yolov5_trt.cpp`
+  在 `HAVE_TENSORRT` 宏后面用 TensorRT 反序列化 `.engine`，`yolo.cpp` 按 `yolov5_backend: "trt"`
+  分发；引擎路径用新增键 `yolov5_trt_engine_path`（默认 `assets/yolov5_0526_fp16.engine`）。
+  本机没装 TensorRT 时构造函数抛明确异常（不静默退化），头文件不含 `<NvInfer.h>`（PIMPL）。
+- **共享预处理/后处理**：`yolos/yolov5_postprocess.{hpp,cpp}` 是 letterbox / sigmoid / parse /
+  NMS / check_name / center_norm 的**唯一实现**，ONNX 与 TensorRT 两个后端都调它，避免行为漂移
+  （§4.1.4 的一致性对比就是对比它）。
+- **ONNX Runtime 后端（已实现，x86_64 / WSL2 主力）**：`tasks/auto_aim/yolos/yolov5_ort.{hpp,cpp}`，
+  依赖 `third_party/onnxruntime`（`scripts/fetch_onnxruntime.sh` 下载，**不入库**），CMake 找到后定义
+  `SPVISION_HAS_ORT`；`yolo.cpp` 在 `auto` 下按 TRT → ORT → `cv::dnn` 选后端，启动日志打印真实选中的
+  那个。实测（`assets/demo/demo.avi` 前 40 帧逐帧对比）：ORT **38/40** 帧有检出、共 38 个装甲板、
+  最高置信度 **0.968**、平均 **53 ms/帧**；`cv::dnn` 同为 38/40 / 38 / 0.968，平均 125 ms/帧。
+- **仍然待补**：① 把 ORT 后处理重构为直接复用 `yolov5_postprocess.*`（一致性用
+  `detect_freq_visual_test -dump=csv` 逐帧对比）；② Jetson 侧 TensorRT 端到端回放（需按 §4.0 装
+  TensorRT 并离线生成 `.engine`）。
 - `multithread/mt_detector` 已去掉 `ov::`（工作线程 + 队列，`push/pop/debug_pop` 接口不变），
   因此这几个 target 的编译不再依赖 OpenVINO。
 
 ### 8.6 仍然缺的降级（尚未实现）
 - `io::Gimbal`：打不开 `/dev/gimbal` 仍会 `exit(1)`（`io/gimbal/gimbal.cpp`）→ `planner_test` / `fire_test` / `gimbal_test` 在笔记本上跑不了（`planner_test_offline` 不受影响）。
-- `uav` / `uav_debug` / `minimum_vision_system` 已接入上述回放键，但在 §4 的 TensorRT 迁移完成前**无法编译**，所以笔记本上的端到端回放要等迁移完成。
+- `uav` / `uav_debug` 已接入上述回放键，但依赖尚未迁移的 `classifier.hpp`（OpenVINO），仍**无法编译**；笔记本上的端到端回放走 `minimum_vision_system` / `auto_aim_test`（ORT 就位即真正跑检测，见 §8.5）。
+
+### 8.7 检测频率可视化测试 + MindVision USB2.0 相机（新增）
+
+- **测试程序**：`tests/detect_freq_visual_test.cpp`（目标 `detect_freq_visual_test`），imshow 前端 +
+  三路曲线：`cap`（相机取流，蓝绿）、`model`（1000/detect_ms）、`pipe`（1000/(pre+detect+draw)），
+  退出时打印各阶段 avg/p50/p95/max。用法（短选项必须 `-c=`）：
+  ```bash
+  ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=replay -n=300 -d
+  ./build/detect_freq_visual_test -c=configs/mv_sua133gc.yaml -m=live -d
+  ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=60 -save=/tmp/shot.png
+  ```
+  `-m=live/replay` 默认开显示；`-m=bench` 默认不显示（无 X 的 Jetson 上用 `-m=bench` + `-save`
+  就能出图检查）。`-dump=<csv>` 导出每帧每个装甲板（一致性对比用）。**画面上只能写 ASCII**
+  （`tools::draw_text` 是 Hershey 字体，中文会变 `????`）。
+- 没有 TensorRT / OpenCV < 4.9 时验证本工具：用一个"输出恒为 `[1,N,22]` 常量"的合成 ONNX 当桩
+  模型（只用 Slice/Sub/Reshape/Add，OpenCV 4.5.x 也能 forward），画框/CSV/曲线/汇总都会走到。
+- **新增配置**：`configs/detect_freq.yaml`（回放 + `yolov5_backend: auto`）、
+  `configs/mv_sua133gc.yaml`（真实 MindVision 相机 + `yolov5_backend: trt`）。
+- **MindVision 新增键（都有默认值，已有 configs 不受影响）**：`mv_device_index`(0)、
+  `mv_friendly_name`("")、`mv_frame_speed`(1；SDK: 0 低速/1 普通/2 高速)、`mv_resolution_width/height`(-1，改了要重标定)、
+  `mv_media_type`(-1)、`mv_gain`(-1；SDK 值 100 = 1.0 倍)、`mv_frame_timeout_ms`(1000，原写死 100)、
+  `mv_usb_reset`(true)。`io::MindVision` 打开时会打印：枚举到的设备、相机能力（分辨率/帧速/输出格式）、
+  USB 链路速度、原始单帧大小 + 带宽估算、usbfs 内存上限，关闭时打印采集统计（共/有效/丢帧）。
+- **实测（Jetson Orin Nano，MV-SUA133GC `f622:0001`，USB2.0 480M 口，1280x1024 Bayer8）**：
+  35.7 fps、0 丢帧（原始 1.25 MB/帧 ≈ 45 MB/s，链路已跑满）；1024x768 ~59fps、640x480 ~134fps。
+  `frame_speed` 0/1/2 在 1280x1024 下都是 ~35.7fps（瓶颈是 USB 链路）。⚠️ 同一枚相机只能被一个
+  进程打开：`CameraInit` 返回 `-18`（设备已经打开）就是上次的程序没退干净，`pgrep -a` 杀掉即可。
+- 注意仓库里 `configs/camera.yaml` 的 `vid_pid: "f622:d13a"` 与本机这枚相机（`f622:0001`）不符：
+  启动日志会告警并给出实际 vid:pid，复位 USB 时会自动退回实际值。
+- ⚠️ **别用 `timeout`/`kill` 强杀相机进程**：`tools::Exiter` 只处理 `SIGINT`，`timeout` 默认发
+  `SIGTERM` 会跳过 `CameraUnInit`，把这枚 USB2.0 老相机留在半开流状态；之后每次 open 都返回
+  "共 N 帧、有效 0、丢帧 N"（`Camera dropped!` 日志里会提示拔插 USB），实测 libusb 复位和
+  正常退出都清不掉，**等 1~2 分钟会自己恢复**（也可以拔插一次 USB / 换 USB3.0 口）。
+  所以：交互调试用 Ctrl+C，脚本里用 `timeout -s INT`，或直接 `detect_freq_visual_test -n=<帧数>`
+  让它自己正常退出。守护线程重连间隔是递增的（0.3s→0.6s→…→5s 上限，恢复出图后重置），
+  避免异常状态下每 100ms 疯狂 open/reset。
 
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
 
@@ -315,7 +365,7 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   ```
   临时用 `git -c user.name=... -c user.email=... commit` 也算合规，但优先配置到仓库。
 - 信息格式（沿用本仓库既有实践）：首行 `<type>(<scope>): <中文摘要>`，`type` ∈
-  `feat|fix|port|build|test|docs|refactor|chore`，`scope` 用模块名（`yolo` / `io` / `tools` / `scripts` /
+  `feat|fix|port|build|test|docs|refactor|chore|merge`，`scope` 用模块名（`yolo` / `io` / `tools` / `scripts` /
   `agents` …），摘要 ≤ 60 字；禁止 `update` / `fix bug` 之类无信息量标题。
 - 正文写清「改了什么 / 为什么 / **实测命令与结果**」，数字必须是真跑出来的（与 §6.2 同一要求）；
   跨平台影响（Jetson / x86_64）要写明。

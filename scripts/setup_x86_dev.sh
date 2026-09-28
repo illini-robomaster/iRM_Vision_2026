@@ -71,8 +71,9 @@ make -C build -j"$(nproc)" \
   camera_test usbcamera_test multi_usbcamera_test cboard_test dm_test \
   fire_test gimbal_test gimbal_response_test handeye_test \
   capture split_video \
+  calibrate_camera calibrate_handeye calibrate_robotworld_handeye \
   minimum_vision_system auto_aim_test camera_thread_test \
-  calibrate_camera calibrate_handeye calibrate_robotworld_handeye
+  detect_freq_visual_test
 
 cat <<'EOF'
 
@@ -85,6 +86,8 @@ cat <<'EOF'
   ./build/camera_test -c=configs/camera.yaml -d      # 真实相机取流（需接相机）
   ./build/usbcamera_test -c=configs/uav.yaml         # USB 相机（需 /dev/videoN）
   ./build/cboard_test -c=configs/uav.yaml            # CAN 通信（需 can0）
+  ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=60   # 检测管线频率（无显示）
+  #   ↑ OpenCV < 4.9 时模型会 forward 失败，程序会打印原因并降级为只测取流/显示（不静默、不退出）
 
 检测后端优先级：TensorRT（未接入）> ONNX Runtime（third_party/onnxruntime 就位时启用）>
 OpenCV DNN（兜底，需 OpenCV >= 4.9），可用 yolo_name / yolov5_backend 键切换，见 AGENTS.md §8.5。

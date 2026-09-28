@@ -8,14 +8,16 @@
 
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/yolo.hpp"
+#include "tasks/auto_aim/yolos/yolov5_postprocess.hpp"
 
 namespace auto_aim
 {
 // P24-DetectionModel（魔改 YOLOv5 + MobileNetV3）的 OpenCV DNN 推理后端。
 //
 // 用途：在 TensorRT 尚未就绪（x86_64 笔记本 / WSL2 没有 TensorRT）或迁移完成前，
-// 提供一个能真正跑起来的检测器；Jetson 上后续以 TensorRT 后端替换推理调用点，
-// 后处理逻辑（parse）保持同一份约定（见 AGENTS.md §4.2）。
+// 提供一个能真正跑起来的检测器；Jetson 上以 TensorRT 后端（yolos/yolov5_trt.cpp）
+// 替换推理调用点，两个后端共用同一份预处理/后处理（yolos/yolov5_postprocess.*），
+// 保证行为逐位一致（见 AGENTS.md §4.2）。
 //
 // 配置（新增键，缺失时用默认值，已有 configs/*.yaml 无需修改）：
 //   yolov5_backend:   "auto"(默认) / "onnx_dnn"
@@ -39,25 +41,15 @@ private:
   std::string model_path_;
   bool debug_, use_roi_;
 
-  const int class_num_ = 13;
-  const float nms_threshold_ = 0.3;
-  const float score_threshold_ = 0.7;
+  // 注意：NMS 阈值(0.3) / 置信度阈值(0.7) / sigmoid / 名称与类型过滤只有一份实现，
+  // 在 yolos/yolov5_postprocess.*（两个后端共用，见该文件说明）
   double min_confidence_;
 
   cv::dnn::Net net_;
   cv::Rect roi_;
   cv::Point2f offset_;
 
-  bool check_name(const Armor & armor) const;
-  bool check_type(const Armor & armor) const;
-
-  cv::Point2f get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center) const;
-
-  std::list<Armor> parse(
-    double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count);
-
-  void draw_detections(const cv::Mat & img, const std::list<Armor> & armors, int frame_count) const;
-  double sigmoid(double x);
+  std::list<Armor> parse(double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count);
 };
 
 }  // namespace auto_aim

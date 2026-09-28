@@ -1,0 +1,44 @@
+# =============================================================================
+# 检测管线频率可视化测试配置（tests/detect_freq_visual_test.cpp）
+#
+# 数据源由 camera_name 决定，改一行即可从回放切到真实相机：
+#   "video"      -> assets/demo/demo.avi 回放（默认，无需相机）
+#   "mindvision" -> MindVision 工业相机（MV-SUA133GC-T1V-C，见 configs/mv_sua133gc.yaml）
+#
+# 推理后端由 yolov5_backend 决定：
+#   "auto" / "onnx_dnn" -> OpenCV DNN 跑 assets/yolov5_0526.onnx（需 OpenCV >= 4.9 / 5.x）
+#   "trt"               -> TensorRT 跑离线生成的 .engine（Jetson；先按 AGENTS.md §4.0 装 TensorRT）
+#   ⚠️ 本机（Jetson，OpenCV 4.5.4）用 "auto" 会在 forward() 失败；TensorRT 未装时 "trt" 会在
+#      构造时抛异常。两种情况测试程序都会打印原因并降级为「只测取流/显示」，不会静默退化。
+#
+# 用法（本仓库用 cv::CommandLineParser，短选项必须写成 -c=<path>，空格分隔会被解析成空）：
+#   ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=replay -n=300 -d
+#   ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench  -n=300
+# =============================================================================
+
+#####-----相机（回放，新增键见 AGENTS.md §8.4）-----#####
+camera_name: "video"
+video_path: "assets/demo/demo.avi"
+video_loop: true
+video_frame_rate: 0 # 0 = 用视频文件自带帧率；想对照别的取流节奏可改成 30 / 60
+
+#####-----神经网络参数-----#####
+yolo_name: yolov5
+min_confidence: 0.8
+
+yolov5_backend: "auto"
+yolov5_onnx_path: "assets/yolov5_0526.onnx"
+# backend=trt 时使用；离线由 trtexec --fp16 生成，.engine 不入库（AGENTS.md §4.0）
+yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
+
+# 传统方法依赖尚未迁移的 Detector/Classifier，本测试路径不使用（AGENTS.md §4.1）
+use_traditional: false
+
+#####-----ROI-----#####
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false

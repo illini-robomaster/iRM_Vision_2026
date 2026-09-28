@@ -40,7 +40,8 @@ jobs:
             camera_test usbcamera_test multi_usbcamera_test cboard_test dm_test \
             fire_test gimbal_test gimbal_response_test handeye_test \
             capture split_video \
-            calibrate_camera calibrate_handeye calibrate_robotworld_handeye
+            calibrate_camera calibrate_handeye calibrate_robotworld_handeye \
+            detect_freq_visual_test
 
       - name: Smoke test (planner_test_offline replay)
         run: |
@@ -78,3 +79,16 @@ jobs:
             exit "$rc"
           fi
           echo "dm_test -p=none ran OK (rc=$rc)"
+
+      - name: Smoke test (detection frequency visual test, bench)
+        run: |
+          set +e
+          # -no-yolo：只测取流/显示，不依赖 OpenCV DNN 版本；本步验证程序能自行跑完并退出
+          timeout -s INT 60 ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=30 -no-yolo
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "detect_freq_visual_test failed with rc=$rc"
+            exit "$rc"
+          fi
+          echo "detect_freq_visual_test ran OK (rc=$rc)"

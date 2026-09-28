@@ -22,3 +22,6 @@ records_25/
 
 # 第三方预编译依赖（ONNX Runtime 等，由 scripts/fetch_onnxruntime.sh 按机器下载）
 third_party/
+
+# Python 字节码缓存（scripts/*.py 被 import / py_compile 时生成）
+__pycache__/

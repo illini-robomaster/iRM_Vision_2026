@@ -339,7 +339,7 @@ bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（�
 一键本地离线回归（不需要相机 / IMU / CAN / 显示器）：
 
 ```bash
-bash scripts/run_local_tests.sh            # 跑全部 6 个用例
+bash scripts/run_local_tests.sh            # 跑全部 7 个用例
 bash scripts/run_local_tests.sh 2 4        # 只跑第 2、4 个用例
 LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 ```
@@ -352,6 +352,7 @@ LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 | 4 | `auto_aim_test -e=60 -c=configs/offline.yaml`（检测+跟踪+规划，60 帧） | 退出码 0 且日志含 `yolo: xx.xms`；无显示环境时自动套 `xvfb-run`，两者都没有则 SKIP |
 | 5 | `detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=40`（检测频率/阶段耗时） | 日志含 `detect…avg`；先探一帧，本机没有任何可用推理后端（TensorRT / ONNX Runtime / OpenCV ≥ 4.9）时 SKIP 而不是 FAIL（`bench` 模式不开窗口，不需要显示环境） |
 | 6 | `detect_freq_visual_test -c=<临时派生 use_traditional: true 的配置> -m=bench -n=20`（传统方法二次矫正 Detector+Classifier） | 日志含 `use_traditional=true`（后端打印的启用消息）；配置由脚本 `sed` 从 `configs/detect_freq.yaml` 现场派生（不新增配置文件），同样先探一帧、缺推理后端时 SKIP |
+| 7 | `scripts/replay_ab.sh assets/demo/demo.avi -n=120 -e ort=yolov5_backend:ort -e dnn=yolov5_backend:dnn`（同录像 A/B：ORT vs `cv::dnn` 逐帧对比检测结果） | 脚本输出 `AB PASS`（rc=0）；可用后端少于 2 个（rc=2）时 SKIP；对比超差（rc=1）是 FAIL，详见 3.6.7 |
 
 退出码：`0` = 没有失败（SKIP 不计入失败），`1` = 有用例 FAIL，`2` = 环境不满足（缺 `build/`）。日志默认留在 `/tmp/sp_vision_local_tests/`，FAIL 时脚本会打印日志末尾 15 行。
 
@@ -404,6 +405,51 @@ LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 **实测（Jetson Orin Nano，MV-SUA133GC `f622:0001`，USB2.0 480M 口，1280x1024 Bayer8）**：`35.7 fps`、`0` 丢帧（原始 1.25 MB/帧 ≈ 45 MB/s，链路已跑满）；1024x768 ≈ 59fps、640x480 ≈ 134fps；`frame_speed` 0/1/2 在 1280x1024 下都是 ~35.7fps（瓶颈在 USB 链路）。⚠️ 仓库里 `configs/camera.yaml` 的 `vid_pid: "f622:d13a"` 与本机这枚相机不符：启动日志会告警并给出实际 `vid:pid`。
 
 > ⚠️ **两条现场坑**：① 同一枚相机只能被一个进程打开，`CameraInit` 返回 `-18`（设备已经打开）说明上次的程序没退干净，`pgrep -a` 杀掉再试；② **别用 `timeout` / `kill` 强杀相机进程**——`tools::Exiter` 只处理 `SIGINT`，`timeout` 默认发 `SIGTERM` 会跳过 `CameraUnInit`，把老 USB2.0 相机留在半开流状态（之后每次 open 都是「有效 0 / 丢帧 N」），等 1~2 分钟自恢复，或拔插一次 USB / 换 USB3.0 口。所以：交互调试用 Ctrl+C，脚本里用 `timeout -s INT`，或直接 `-n=<帧数>` 让它自己正常退出。
+
+#### 3.6.7 录制回放 + A/B 一致性基线（新增）
+
+**目的**：把「真机识别效果」变成**可复核、可复跑**的证据——真机录一段 -> 离线回放 -> 在同一段画面上对比不同配置的检测结果。对应 AGENTS.md §4.1.4（合入前必须给一致性对比）与 §8.7。以前这种对比靠人工盯 `-dump` 的数字，容易漏也不可复跑，现在固定成脚本。
+
+**① 录制（需要相机，`record_video` 开关）**：`record_video` / `record_fps` 是**新增 yaml 键**，默认 `false` / `30`，缺键时行为与之前**完全一致**（现有 `configs/*.yaml` 一个都不用改）。打开后相机帧 + 当时姿态经 `tools::Recorder` 落到 `records/<时间>.avi|txt`（`records*/` 已在 `.gitignore` 里）。三个程序读同一组键，按手上有什么选用：
+
+| 程序 | 需要的硬件 | txt 里的姿态 |
+|---|---|---|
+| `./build/uav_debug -c=...` | 全链路（相机 + CBoard/IMU + can0） | 真实云台姿态 |
+| `./build/minimum_vision_system -c=...` | 只要相机（台架，不用 can0） | 真实姿态；`imu_name: "none"` 时是单位四元数 |
+| `./build/detect_freq_visual_test -c=... -m=bench -n=300` | 只要相机 + 推理后端（不需要标定） | **单位四元数（无意义），只取 avi** |
+
+```bash
+sed 's/^record_video: false/record_video: true/' configs/detect_freq.yaml >/tmp/rec.yaml
+./build/detect_freq_visual_test -c=/tmp/rec.yaml -m=bench -n=300   # -> records/2026-09-28_xx-xx-xx.avi
+```
+
+**② A/B 对比（`scripts/replay_ab.sh` + `scripts/csv_ab.py`，纯标准库）**：把录像当输入，脚本**强制** `camera_name: "video"` + `video_loop: false`（基配置里的真机相机键被忽略），每个变体只改 yaml 里的一两个键：
+
+```bash
+# 后端一致性（期望 AB PASS；基线见 AGENTS.md §8.5 = conf 差 5.8e-5 / 角点差 0.07px）
+bash scripts/replay_ab.sh assets/demo/demo.avi -n=120 -e ort=yolov5_backend:ort -e dnn=yolov5_backend:dnn
+# 反例自证（改了检出阈值就该被抓住，期望 AB FAIL）
+bash scripts/replay_ab.sh assets/demo/demo.avi -n=120 -e lo=min_confidence:0.8 -e hi=min_confidence:0.95
+# 真机片段也走同一条命令
+bash scripts/replay_ab.sh records/2026-09-28_12-00-00.avi -n=200 -e net=use_traditional:false -e trad=use_traditional:true
+```
+
+| 选项 / 变体 | 默认 | 说明 |
+|---|---|---|
+| `[video.avi]` 或 `-v=<path>` | `assets/demo/demo.avi` | 录像路径（真机录制的 `records/*.avi` 直接放这里） |
+| `-c=<path>` | `configs/detect_freq.yaml` | 基配置；派生文件写在 `LOG_DIR` 里，不改仓库里的配置 |
+| `-n=<帧数>` | `120` | 每个变体跑多少帧；**不能超过录像帧数**（`video_loop: false` 读到尾会抛 `reached end of`，脚本会提示） |
+| `-t=<秒>` | `300` | 每个变体的限时 |
+| `-e <名字>=<键:值[,键:值...]>` | — | 一个变体（也接受 `-e=<...>`）；键不在基配置里时追加到派生 yaml 末尾；值原样写入，字符串请自带引号 |
+
+比较口径（`scripts/csv_ab.py`）：同一帧内按**中心距离最小贪心配对**（**不按 `armor_idx`**——那是各后端 NMS 之后的顺序，直接按序号配会误报）；「单侧检出帧」（一边有、一边没有）不为 0、标签（颜色/编号/类型）不一致、`max|Δconf| > 1e-2`、`max|Δpx| > 3.0` 任一成立即 `AB FAIL` 并打印样例。退出码：`0` = `AB PASS`；`1` = 有变体跑失败或对比超差；`2` = 可用变体少于 2 个（例如本机没有可用推理后端，`run_local_tests.sh` 用例 7 把 `2` 当 SKIP）。
+
+**实测（本机 WSL2 / x86_64，OpenCV 4.10.0 + ONNX Runtime 1.17.3，`assets/demo/demo.avi` 前 120 帧）**：
+
+- ORT vs `cv::dnn`：`AB PASS`（rc=0）。两边都有检出的帧 **102/120**，装甲板数量与颜色/编号/类型标签**完全一致**，`max|Δconf|` **9.7e-5**、`max|Δpx|` **0.10 px** —— 阈值（1e-2 / 3.0）比实测宽两个数量级，说明这条基线还有很大余量给 TensorRT FP16。
+- 反例 `min_confidence: 0.8` vs `0.95`：`AB FAIL`（rc=1），`0.8` 多出 **48** 个单侧检出帧（102 vs 54 帧有检出）——比较器不是恒 PASS 的空壳。
+
+⚠️ **真机录制这条路径本次没有验证**（手上没有相机）：只保证三个程序编译通过、默认 `record_video: false` 不改变既有行为；录制产物（MJPEG avi）的回放侧用的就是本机验证过的 `camera_name: "video"` 路径。
 
 ## 4 轨迹视角下的自瞄理论
 ### 4.1 引言

@@ -8,9 +8,10 @@
 #   4) auto_aim_test         端到端回放：检测（ONNX Runtime / cv::dnn）+ 跟踪 + 规划（需显示环境）
 #   5) detect_freq_visual_test  检测链路的阶段性耗时 / 频率（cap/pre/detect/draw，bench 模式不需显示）
 #   6) detect_freq_visual_test  传统方法二次矫正（use_traditional=true，Detector+Classifier）走通
+#   7) replay_ab.sh             同录像 A/B 一致性基线（ORT vs cv::dnn，检测结果逐帧对比）
 #
 # 用法：
-#   bash scripts/run_local_tests.sh          # 跑全部
+#   bash scripts/run_local_tests.sh          # 跑全部 7 个用例
 #   bash scripts/run_local_tests.sh 2 4      # 只跑第 2、4 个用例
 #   LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 #
@@ -174,6 +175,50 @@ else
   else
     run_case 6 "detect_freq_visual_test：传统方法二次矫正（Detector+Classifier，bench 20 帧）" 120 \
       'use_traditional=true' "${DF_BIN}" "${DF_BIN}" -c="${TRAD_YAML}" -m=bench -n=20
+  fi
+fi
+
+#   7) A/B 一致性基线：同一段录像上跑两组 yaml 变体，逐帧对比检测结果（数量 / 标签 / 置信度 /
+#      角点像素差，比较逻辑在 scripts/csv_ab.py）。这里用 ORT vs cv::dnn 两个后端，对应
+#      AGENTS.md §8.5 的人工实测基线（conf 差 5.8e-5 / 角点差 0.07px）。replay_ab.sh 自己会
+#      探针：可用变体少于 2 个（本机没有可用推理后端）返回 2 -> 按 SKIP 处理；超差返回 1 -> FAIL。
+AB_BIN=./scripts/replay_ab.sh
+if [ ! -x "${AB_BIN}" ]; then
+  skip 7 "replay_ab.sh：同录像 A/B 一致性（ORT vs cv::dnn）" "缺少 ${AB_BIN}"
+else
+  AB_NAME="replay_ab.sh：同录像 A/B 一致性（ORT vs cv::dnn，120 帧）"
+  AB_LOG="${LOG_DIR}/7_replay_ab.log"
+  LOG_DIR="${LOG_DIR}/7_replay_ab" timeout -s INT 240 bash "${AB_BIN}" assets/demo/demo.avi -n=120 \
+    -e ort=yolov5_backend:ort -e dnn=yolov5_backend:dnn >"${AB_LOG}" 2>&1
+  AB_RC=$?
+  if [ "${AB_RC}" -eq 2 ]; then
+    skip 7 "replay_ab.sh：同录像 A/B 一致性（ORT vs cv::dnn）" \
+      "可用推理后端少于 2 个（脚本返回 2），见 ${AB_LOG}"
+  else
+    AB_SEL=0
+    if [ "${#ONLY[@]}" -gt 0 ]; then
+      AB_SEL=1
+      for want in "${ONLY[@]}"; do
+        [ "${want}" = "7" ] && AB_SEL=0
+      done
+    fi
+    if [ "${AB_SEL}" -eq 0 ]; then
+      printf '\n%s[7]%s %s %s(限时 240s)%s\n' \
+        "${C_BLU}" "${C_RST}" "${AB_NAME}" "${C_DIM}" "${C_RST}"
+      if [ "${AB_RC}" -eq 0 ] && grep -q 'AB PASS' "${AB_LOG}"; then
+        PASS=$((PASS + 1))
+        printf '  %sPASS%s  rc=0，命中标记 /AB PASS/  %s(log: %s)%s\n' \
+          "${C_GRN}" "${C_RST}" "${C_DIM}" "${AB_LOG}" "${C_RST}"
+        SUMMARY+=("${C_GRN}PASS${C_RST} [7] ${AB_NAME} —— 两后端逐帧一致")
+      else
+        FAIL=$((FAIL + 1))
+        printf '  %sFAIL%s  rc=%s，A/B 未通过（详见日志）  %s(log: %s)%s\n' \
+          "${C_RED}" "${C_RST}" "${AB_RC}" "${C_DIM}" "${AB_LOG}" "${C_RST}"
+        printf '  %s日志末尾 15 行：%s\n' "${C_DIM}" "${C_RST}"
+        tail -n 15 "${AB_LOG}" | sed 's/^/    /'
+        SUMMARY+=("${C_RED}FAIL${C_RST} [7] ${AB_NAME} —— rc=${AB_RC}")
+      fi
+    fi
   fi
 fi
 

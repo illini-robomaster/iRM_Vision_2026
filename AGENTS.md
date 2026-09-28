@@ -318,8 +318,16 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   （验证后已删除）确认 `Detector::detect(Armor&, img)` 恰好被调用 **18** 次 = 检出数。这份 demo 视频
   的画面过不了传统方法的几何检查（`detect()` 返回 false），所以角点与关掉时逐帧一致
   （`-dump=csv` 两份完全相同）——这是原实现的行为（矫正不成立就保留网络关键点），不是“没接上”。
+- **一致性对比已自动化**：`scripts/replay_ab.sh`（+ `scripts/csv_ab.py`，纯标准库）把「同一段录像、
+  只改 yaml 一个键」的 A/B 固化成脚本：强制 `camera_name: "video"` + `video_loop: false`，用
+  `detect_freq_visual_test -m=bench -dump=CSV` 跑每个变体，再逐帧比较（帧内按中心距离贪心配对，
+  **不按** `armor_idx`），「单侧检出帧 / 数量不一致 / 标签不一致 / `max|Δconf|` / `max|Δpx|`」任一
+  超阈值即 `AB FAIL`。`scripts/run_local_tests.sh` 用例 7 就是 ORT vs `cv::dnn` 这条（实测 `AB PASS`，
+  `max|Δconf|` 9.7e-5、`max|Δpx|` 0.10px）；反例自证 `-e lo=min_confidence:0.8
+  -e hi=min_confidence:0.95` → `AB FAIL`（单侧检出 48 帧）。变体输入可以是真机录制的片段，见 §8.7。
 - **仍然待补**：Jetson 侧 TensorRT 端到端回放（需按 §4.0 装 TensorRT 并离线生成 `.engine`）；
-  ORT 复用共享后处理已完成（三个后端现在只有推理调用点不同）。
+  ORT 复用共享后处理已完成（三个后端现在只有推理调用点不同）；`record_video` 的**真机录制**路径
+  本机（无相机）未验证，只保证编译通过 + 默认关时行为不变。
 - `multithread/mt_detector` 已去掉 `ov::`（工作线程 + 队列，`push/pop/debug_pop` 接口不变），
   因此这几个 target 的编译不再依赖 OpenVINO。
 
@@ -362,6 +370,18 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   所以：交互调试用 Ctrl+C，脚本里用 `timeout -s INT`，或直接 `detect_freq_visual_test -n=<帧数>`
   让它自己正常退出。守护线程重连间隔是递增的（0.3s→0.6s→…→5s 上限，恢复出图后重置），
   避免异常状态下每 100ms 疯狂 open/reset。
+- **录制开关（新增可选键）**：`record_video`（默认 `false`）/ `record_fps`（默认 `30`），`src/uav_debug.cpp`、
+  `tests/minimum_vision_system.cpp`、`tests/detect_freq_visual_test.cpp` 三个程序用
+  `tools::optional_bool` / `tools::optional_double`（§4.1.2 新增键约定：缺键返回默认值、**不** `exit`）读
+  同一组键；打开后相机帧 + 当时姿态经 `tools::Recorder` 落到 `records/<时间>.avi|txt`（`records*/` 已忽略）。
+  `detect_freq_visual_test` 没有姿态来源，txt 里写单位四元数（只取 avi）。⚠️ 真机录制路径本机（无相机）
+  未验证，只保证编译通过 + 默认 `false` 时行为与之前完全一致。
+- **A/B 基线脚本**：`scripts/replay_ab.sh <video.avi> [-c=<基配置>] [-n=<帧数>] -e <名>=<键:值> ...`
+  从基配置现场派生（`awk` 顶层键改写：有则替换、无则追加；强制 `camera_name: "video"` /
+  `video_loop: false`），每个变体先探针 1 帧（日志没有 `backend=` 且 `-n=1` 也跑不出检测就 SKIP），
+  再跑 bench + `-dump`，最后调 `scripts/csv_ab.py` 逐帧比较；退出码 `0` = AB PASS / `1` = AB FAIL /
+  `2` = 可用变体少于 2 个。`run_local_tests.sh` 用例 7 用它（ORT vs `cv::dnn`），实测见 §8.5。
+  ⚠️ `-n` 不能超过录像帧数：`video_loop: false` 读到尾会抛 `reached end of`（脚本会给这条提示）。
 
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
 

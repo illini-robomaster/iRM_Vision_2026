@@ -3,8 +3,9 @@
 > **Scope of this file.** For now this README documents exactly **one** path: bringing up the
 > **MindVision camera pipeline** and proving that the imaging pipeline is *pinned* (every ISP
 > parameter explicitly written, then read back). The complete project documentation - architecture,
-> auto-aim theory, WSL/x86_64 replay setup, inference backends, every other test program - is kept
-> untouched in [`readme_zh.md`](readme_zh.md) (Chinese). More sections will be ported here over time.
+> auto-aim theory, WSL/x86_64 replay setup, inference backends (TensorRT / ONNX Runtime / OpenCV
+> DNN), every other test program - lives in [`readme_zh.md`](readme_zh.md) (Chinese), which is the
+> current full Chinese README. More sections will be ported here over time.
 >
 > Engineering rules for this port live in [`AGENTS.md`](AGENTS.md): section 8.7 (detection-frequency
 > test tool + MindVision keys) and section 8.8 (headless streaming + pinned pipeline).
@@ -228,5 +229,7 @@ Changing the resolution invalidates the camera calibration, so keep 1280x1024 un
 
 - [`AGENTS.md`](AGENTS.md) section 8.7: `detect_freq_visual_test` and the MindVision keys;
   section 8.8: headless MJPEG streaming and the pinned pipeline (engineering rules, Chinese).
-- [`readme_zh.md`](readme_zh.md): the original, complete Chinese README of this project.
+- [`readme_zh.md`](readme_zh.md): the current full Chinese README of this project (a superset of
+  this file - everything not ported here yet, including the inference backends and the local
+  regression runner, lives there).
 - `configs/mv_sua133gc.yaml`: the config file itself, with the measurement notes inline.

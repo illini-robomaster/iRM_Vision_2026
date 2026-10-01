@@ -5,11 +5,14 @@
 #   "video"      -> assets/demo/demo.avi 回放（默认，无需相机）
 #   "mindvision" -> MindVision 工业相机（MV-SUA133GC-T1V-C，见 configs/mv_sua133gc.yaml）
 #
-# 推理后端由 yolov5_backend 决定：
-#   "auto" / "onnx_dnn" -> OpenCV DNN 跑 assets/yolov5_0526.onnx（需 OpenCV >= 4.9 / 5.x）
-#   "trt"               -> TensorRT 跑离线生成的 .engine（Jetson；先按 AGENTS.md §4.0 装 TensorRT）
-#   ⚠️ 本机（Jetson，OpenCV 4.5.4）用 "auto" 会在 forward() 失败；TensorRT 未装时 "trt" 会在
-#      构造时抛异常。两种情况测试程序都会打印原因并降级为「只测取流/显示」，不会静默退化。
+# 推理后端由 yolov5_backend 决定（AGENTS.md §8.5）：
+#   "auto"                  -> 按编译期可用性选 TensorRT → ONNX Runtime → OpenCV DNN
+#   "trt"                   -> TensorRT 跑离线生成的 .engine（Jetson；先按 AGENTS.md §4.0 装 TensorRT）
+#   "ort" / "onnxruntime"   -> ONNX Runtime 跑 assets/yolov5_0526.onnx（x86_64 / WSL2 主力）
+#   "onnx_dnn" / "dnn"      -> OpenCV DNN 跑同一个 onnx（需 OpenCV >= 4.9 / 5.x）
+#   ⚠️ OpenCV 4.5.x 的 DNN 会在 forward() 断言失败；TensorRT 未装 / 没生成 .engine 时 "auto" 会
+#      warn 后回退下一个后端，显式写 "trt" 则直接抛异常（都不静默出错误结果）。
+#      ORT 需要先 `bash scripts/fetch_onnxruntime.sh`（不入库），否则该后端不参与编译。
 #
 # 用法（本仓库用 cv::CommandLineParser，短选项必须写成 -c=<path>，空格分隔会被解析成空）：
 #   ./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=replay -n=300 -d
@@ -23,6 +26,7 @@ video_loop: true
 video_frame_rate: 0 # 0 = 用视频文件自带帧率；想对照别的取流节奏可改成 30 / 60
 
 #####-----神经网络参数-----#####
+classify_model: assets/tiny_resnet.onnx # 传统方法（use_traditional=true）用的数字分类器
 yolo_name: yolov5
 min_confidence: 0.8
 
@@ -31,8 +35,32 @@ yolov5_onnx_path: "assets/yolov5_0526.onnx"
 # backend=trt 时使用；离线由 trtexec --fp16 生成，.engine 不入库（AGENTS.md §4.0）
 yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
 
-# 传统方法依赖尚未迁移的 Detector/Classifier，本测试路径不使用（AGENTS.md §4.1）
+# 传统方法二次矫正角点（Detector + Classifier，三个后端都支持）：
+#   false -> 只用网络关键点；true -> 每个检出再用传统方法矫正一次角点（detect 耗时约 +1/3）
+# 改成 true 时，下面「传统方法参数」那段键必须存在，否则 Detector 构造会抛异常
+# （yolo.cpp 的 configure_traditional 会给出带后端名的明确报错）
 use_traditional: false
+
+#####-----传统方法（Detector/Classifier）参数（与 configs/demo.yaml 同值）-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----录制（新增键，默认 false：不录制，行为与之前完全一致）-----#####
+# record_video: true  -> 把相机帧录成 records/<时间>.avi（tools::Recorder，MJPEG；records/ 不入库），
+#                        以便之后派生一份 camera_name: "video" + video_path: records/xxx.avi 的配置回放，
+#                        用 scripts/replay_ab.sh 做「同一段真机画面」上的 A/B。
+# record_fps           -> 落盘帧率上限（默认 30），实际录制按取流节奏抽帧，不改变处理链路。
+# 本程序没有人机姿态来源：txt 里的人机四元数是单位四元数（无意义），产物只取 avi。
+# 真机全链路录制（带真实姿态）请用 uav_debug / minimum_vision_system，它们读同一组键。
+record_video: false
+record_fps: 30
 
 #####-----ROI-----#####
 roi:

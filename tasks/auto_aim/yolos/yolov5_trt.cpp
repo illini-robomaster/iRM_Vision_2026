@@ -175,9 +175,7 @@ YOLOV5_TRT::YOLOV5_TRT(const std::string & config_path, bool debug)
   offset_ = cv::Point2f(x, y);
 
   if (yaml["use_traditional"] && yaml["use_traditional"].as<bool>()) {
-    tools::logger()->warn(
-      "[YOLOV5_TRT] use_traditional=true 暂不支持：传统方法依赖 auto_aim::Detector/Classifier，"
-      "尚未迁移（AGENTS.md §4.1）；本后端只使用网络输出的关键点");
+    configure_traditional(config_path, "YOLOV5_TRT");
   }
 
 #ifdef HAVE_TENSORRT
@@ -342,7 +340,8 @@ std::list<Armor> YOLOV5_TRT::detect(const cv::Mat & raw_img, int frame_count)
   cv::Mat output_2d(rows, cols, CV_32F, impl_->host_output_float.data());
 
   return yolov5_post::parse(
-    scale, output_2d, raw_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_);
+    scale, output_2d, raw_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_,
+    traditional());
 #else
   (void)blob;
   (void)scale;
@@ -355,7 +354,8 @@ std::list<Armor> YOLOV5_TRT::postprocess(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
   return yolov5_post::parse(
-    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_);
+    scale, output, bgr_img, frame_count, min_confidence_, use_roi_, roi_, offset_, debug_,
+    traditional());
 }
 
 }  // namespace auto_aim

@@ -19,6 +19,8 @@ namespace auto_aim
 // 模型输出约定（AGENTS.md §4.2，与 yolos/yolov5.cpp::parse() 一致）：
 //   [1, 25200, 22]，每行 = 4 个关键点(0..7) + 置信度 raw logits(8，代码里再 sigmoid)
 //                       + 颜色(9..12) + 编号(13..21)
+class Detector;  // 传统方法（use_traditional 的二次矫正），定义见 tasks/auto_aim/detector.hpp
+
 namespace yolov5_post
 {
 constexpr int kOutputCols = 22;
@@ -31,10 +33,14 @@ cv::Mat letterbox(const cv::Mat & bgr_img, double & scale);
 
 // 解析 [25200, 22] 的输出：sigmoid 置信度 -> 阈值 -> argmax 颜色/编号 -> NMS
 // -> 名称/类型过滤 -> center_norm（debug 为 true 时额外画框到 "detection" 窗口）
+//
+// traditional：非空则启用「传统方法二次矫正角点」（yaml 的 use_traditional=true），在算
+// center_norm **之前**对每个装甲板调一次 Detector::detect(armor, bgr_img)，与旧 OpenVINO 版
+// yolos/yolov5.cpp 的顺序一致。传 nullptr = 关闭（三个后端共用这一份实现）。
 std::list<Armor> parse(
   double scale, const cv::Mat & output_2d, const cv::Mat & bgr_img, int frame_count,
   double min_confidence, bool use_roi, const cv::Rect & roi, const cv::Point2f & offset,
-  bool debug);
+  bool debug, Detector * traditional = nullptr);
 
 double sigmoid(double x);
 

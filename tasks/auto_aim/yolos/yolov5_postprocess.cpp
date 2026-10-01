@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "tools/img_tools.hpp"
+#include "tasks/auto_aim/detector.hpp"  // use_traditional 的二次矫正（traditional 非空时）
 
 namespace auto_aim
 {
@@ -63,7 +64,8 @@ cv::Point2f get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center)
 
 std::list<Armor> parse(
   double scale, const cv::Mat & output, const cv::Mat & bgr_img, int frame_count,
-  double min_confidence, bool use_roi, const cv::Rect & roi, const cv::Point2f & offset, bool debug)
+  double min_confidence, bool use_roi, const cv::Rect & roi, const cv::Point2f & offset, bool debug,
+  Detector * traditional)
 {
   // 每一行：4 个关键点(0..7) + 置信度(8，raw logits) + 颜色(9..12) + 编号(13..21)
   std::vector<int> color_ids, num_ids;
@@ -144,8 +146,11 @@ std::list<Armor> parse(
       continue;
     }
 
-    // 注：原 OpenVINO 版在此处用传统方法二次矫正角点（use_traditional），依赖尚未迁移的
-    // auto_aim::Detector / Classifier，所有后端都跳过（见 AGENTS.md §4.1）
+    // 传统方法二次矫正角点（= 原 OpenVINO 版 yolos/yolov5.cpp 的
+    // `if (use_traditional_) detector_.detect(*it, bgr_img);`）。位置固定在 center_norm 之前，
+    // 与原实现一致：矫正后角点变了，center_norm 必须用新角点重算。
+    if (traditional != nullptr) traditional->detect(*it, bgr_img);
+
     it->center_norm = get_center_norm(bgr_img, it->center);
     ++it;
   }

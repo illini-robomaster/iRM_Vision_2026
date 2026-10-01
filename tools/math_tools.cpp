@@ -7,6 +7,11 @@ namespace tools
 {
 double limit_rad(double angle)
 {
+  // 先用 fmod 做一次 O(1) 归约：EKF 状态发散时 angle 可能是 1e100 量级，
+  // 只靠下面的 while 循环会退化成死循环（每减一个 2*CV_PI 迭代一次），
+  // 使 Target::diverged() 的发散保护永远执行不到。
+  // 对 |angle| < 2*CV_PI 的常规输入 fmod 原样返回，结果与原来完全一致。
+  angle = std::fmod(angle, 2 * CV_PI);
   while (angle > CV_PI) angle -= 2 * CV_PI;
   while (angle <= -CV_PI) angle += 2 * CV_PI;
   return angle;
@@ -126,7 +131,9 @@ Eigen::MatrixXd xyz2ypd_jacobian(const Eigen::Vector3d & xyz)
   auto ddistance_dz = z / std::pow((x * x + y * y + z * z), 0.5);
 
   // clang-format off
-  Eigen::MatrixXd J;
+  // 必须先指定尺寸：Eigen 动态矩阵默认 0x0（data() 为空指针），
+  // 直接对未指定尺寸的 MatrixXd 使用逗号初始化会写到空指针导致段错误（AGENTS.md §2.1）
+  Eigen::MatrixXd J(3, 3);
   J << dyaw_dx, dyaw_dy, dyaw_dz,
        dpitch_dx, dpitch_dy, dpitch_dz,
        ddistance_dx, ddistance_dy, ddistance_dz;
@@ -165,7 +172,8 @@ Eigen::MatrixXd ypd2xyz_jacobian(const Eigen::Vector3d & ypd)
   auto dz_ddistance = sin_pitch;
 
   // clang-format off
-  Eigen::MatrixXd J;
+  // 同上：动态矩阵必须先指定尺寸（AGENTS.md §2.1）
+  Eigen::MatrixXd J(3, 3);
   J << dx_dyaw, dx_dpitch, dx_ddistance,
        dy_dyaw, dy_dpitch, dy_ddistance,
        dz_dyaw, dz_dpitch, dz_ddistance;

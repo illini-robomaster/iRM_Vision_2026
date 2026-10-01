@@ -266,17 +266,18 @@ sp_vision_25
 cd ~ && git clone git@github.com:illini-robomaster/iRM_Vision_2026.git
 cd iRM_Vision_2026
 
-# ② 一键：装 apt 依赖 + 生成 .vscode/eigen_fix.h + configure + 编译可移植子集
+# ② 一键：装 apt 依赖 + 生成 .vscode/eigen_fix.h + 取 ONNX Runtime + configure + 编译可移植子集
 bash scripts/setup_x86_dev.sh -y
 ```
 
 依赖：`build-essential cmake libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libceres-dev can-utils`（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 里 `find_package(Ceres REQUIRED)` 的必需项）。
 
-**当前可移植的目标子集**（不依赖推理后端，23 个）：
+**当前可移植的目标子集**（不依赖 OpenVINO，30 个）：
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（见 3.6.5）
+- 可执行（不需要检测）：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（见 3.6.6）、`camera_detect_test`、`detector_video_test`、`uav_debug`
+- 可执行（端到端检测，需要 3.6.5 的推理后端）：`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`。缺 ONNX Runtime 也能编译链接（后端代码由 `SPVISION_HAS_ORT` 条件编译），只是运行时会回退 `cv::dnn`。
 
-**依赖推理后端、当前编译失败**（属预期状态，TensorRT 迁移完成后恢复）：`uav`、`uav_debug`、`minimum_vision_system`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`、`auto_aim_test`、`camera_detect_test`、`camera_thread_test`、`usbcamera_detect_test`、`detector_video_test`。原因只有两类：缺 `<openvino/openvino.hpp>`，或 `auto_aim::YOLO` 符号未参与编译。
+**仍然编译失败**（`fatal error: openvino/openvino.hpp`，属 AGENTS.md §4.1 待迁移清单，TensorRT 迁移完成后恢复）：只剩 `tasks/auto_buff/yolo11_buff.hpp` 一条链路——`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`，以及链接 `auto_buff` 的 `uav`。`classifier` / `detector` 已完成去 OpenVINO，因此 `camera_detect_test`、`detector_video_test`、`uav_debug` 现在都能编；`use_traditional`（传统方法二次矫正）也随之恢复（见 3.6.5）。**不要**为了让上面这几个目标“编过”而注释逻辑或加临时桩。
 
 #### 3.6.3 离线回放（无需相机 / IMU / 下位机）
 
@@ -306,9 +307,57 @@ bash scripts/setup_x86_dev.sh -y
 
 #### 3.6.4 CI
 
-`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上述 23 个目标，并冒烟运行 `planner_test_offline`、`camera_test`（视频回放）、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`（只测取流/显示，不依赖 DNN 版本），用于保证 x86_64 这条开发链路不会被改坏。
+`.github/workflows/build-x86.yml` 会在 ubuntu-22.04 上编译上面那批可移植目标中**显式列出的 26 个**（库 + 不需要推理后端的可执行，含 `detect_freq_visual_test`、`camera_detect_test`、`detector_video_test`、`uav_debug`），并冒烟运行 `planner_test_offline`（纯规划）、`camera_test -c=configs/offline.yaml`（视频回放取流）、`dm_test -p=none`（无 IMU 回放）、`detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=30 -no-yolo`（只测取流/显示，不依赖 DNN 版本），用于保证 x86_64 这条开发链路不会被改坏。
 
-#### 3.6.5 检测频率可视化测试 + MindVision 相机参数（新增）
+> CI 里不下载 ONNX Runtime（`third_party/` 不入库），所以 `auto_aim_test` / `minimum_vision_system` 这类端到端检测只在本地 / WSL2 覆盖——那里会回退 `cv::dnn`，而 ubuntu-22.04 的 OpenCV 4.5.4 跑不了本模型（见 3.6.5）。需要 CI 也覆盖检测时，先加一步 `bash scripts/fetch_onnxruntime.sh`。
+
+#### 3.6.5 推理后端（TensorRT / ONNX Runtime / OpenCV DNN）与本地回归
+
+`auto_aim::YOLO` 按「编译期真的编译进来 +（TRT 时）运行期引擎真的在」的优先级挑后端，并在启动日志里打印实际选中的后端：
+
+| 优先级 | 后端 | 生效条件 | 备注 |
+|---|---|---|---|
+| 1 | TensorRT | `HAVE_TENSORRT`（CMake 找到 `NvInfer.h` + `libnvinfer` + `cudart`），且 `auto` 模式下 `.engine` 文件真的存在 | Jetson 目标后端 `tasks/auto_aim/yolos/yolov5_trt.cpp`；需先按 AGENTS.md §4.0 装 TensorRT，再用 `trtexec --fp16` 离线生成 `.engine`（**不入库**，键 `yolov5_trt_engine_path`，默认 `assets/yolov5_0526_fp16.engine`）。显式写 `trt` 时缺 TRT / 缺引擎直接抛清晰异常，不静默退化 |
+| 2 | ONNX Runtime | `SPVISION_HAS_ORT`（CMake 找到 `third_party/onnxruntime`） | x86_64 / WSL2 主力后端 |
+| 3 | OpenCV DNN | `cv::dnn` 能 load **且** forward 能跑本模型 | 兜底，需要 OpenCV ≥ 4.9（4.5.4 会在 5D Reshape 上断言失败） |
+
+TensorRT、ONNX Runtime 与 OpenCV DNN **共用**同一套预处理/后处理实现 `tasks/auto_aim/yolos/yolov5_postprocess.{hpp,cpp}`（letterbox、`/255`、BGR→RGB、`col8` 做 sigmoid、关键点顺序、NMS、名称/类型过滤、center_norm 的唯一实现，避免行为漂移）——三个后端只保留「推理调用点」的差异（AGENTS.md §4.2 的一致性对比就是对比它）。它同时还承载 `use_traditional` 的传统方法二次矫正：`parse()` 接一个可空的 `Detector *`，非空时在 `center_norm` 之前对每个存活检出调用 `traditional->detect(armor, bgr_img)`（与原 OpenVINO 版 `yolov5.cpp` 的顺序一致）。
+
+**传统方法二次矫正（`use_traditional`，随 classifier/detector 去 OpenVINO 恢复）**：`classifier.{cpp,hpp}` 的 `ov::Core` / `ov::CompiledModel` / `ovclassify()` 已删除（只留 `cv::dnn` + `classify_model`，默认 `assets/tiny_resnet.onnx`），`detector.{cpp,hpp}` 不再 include OpenVINO 头，因此 `auto_aim::YOLOBase::configure_traditional()`（`yolo.{hpp,cpp}`）能重新持有 `std::unique_ptr<Detector>`。三个后端都调它，所以 `yolov5_backend` 取任何值都支持 `use_traditional: true`；启用时 yaml 里必须有传统方法那组键（`threshold` / `max_angle_error` / `min_lightbar_ratio` / `max_lightbar_ratio` / `min_lightbar_length` / `min_armor_ratio` / `max_armor_ratio` / `max_side_ratio` / `max_rectangular_error`）与 `classify_model`，缺失时构造抛带后端名的异常，不会静默退化。
+
+实测：`configs/offline.yaml` 里本来就是 `use_traditional: true` + 全套传统方法键，所以本地回归的**用例 4（`auto_aim_test -e=60 -c=configs/offline.yaml`，检测→跟踪→规划 60 帧）本身就是这条路径的端到端验证**，日志首行即 `[YOLOV5_ORT] use_traditional=true：已启用传统方法二次矫正角点（Detector+Classifier…）`。单独用 `configs/detect_freq.yaml` 派生 `use_traditional: true` 再测（本机 WSL2 / ORT 1.17.3 / `assets/demo/demo.avi`）：bench 20 帧 `detect` 平均 **32.01 ms**（关掉时 40 帧 **31.94 ms**）、退出码 0、共 18 个装甲板。用临时计数日志（验证后已删除）确认 `Detector::detect(Armor&, img)` 恰好被调用 **18** 次 = 检出数；这份 demo 视频的画面过不了传统方法的几何检查，`detect()` 返回 false（保留网络关键点），所以 `-dump=csv` 两份逐帧完全一致——这是原实现行为，不是“没接上”。
+
+```bash
+bash scripts/fetch_onnxruntime.sh        # 下载到 third_party/onnxruntime（不入库），已存在则跳过
+# 已有 ORT 想复用：cmake -B build -DSPVISION_ORT_ROOT=/path/to/onnxruntime   或   export ORT_DIR=/path/to/onnxruntime
+```
+
+配置键（全是新增键，缺失时有默认值，`configs/*.yaml` 已有键一个都没改）：`yolov5_backend` = `auto`(默认) / `trt` / `tensorrt` / `ort` / `onnxruntime` / `onnx_dnn` / `dnn` / `cv_dnn`；`yolov5_ort_path`（默认沿用 `yolov5_onnx_path`，再退到 `assets/yolov5_0526.onnx`）、`yolov5_ort_intra_threads`（默认 0 = 交给 ORT 自己决定）、`yolov5_trt_engine_path`（默认 `assets/yolov5_0526_fp16.engine`）。写成 `openvino` 会直接抛异常（AGENTS.md §0.4）。
+
+一致性实测（`-dump=csv` 逐帧对比，本机 WSL2 / x86_64 + OpenCV 4.10.0 + ONNX Runtime 1.17.3，`assets/demo/demo.avi` 前 40 帧）：ORT 与 `cv::dnn` 都是 **38/40** 帧有检出、共 **38** 个装甲板、最高置信度 **0.968**，逐帧装甲板数量与颜色/编号/类型标签**完全一致**，最大置信度差 **5.8e-5**、最大关键点像素差 **0.07 px**；平均耗时 ORT **40.5 ms/帧**（p95 47.4 ms）、`cv::dnn` **46.5 ms/帧**（p95 66.3 ms）。（更早一版按各自实现跑出来的数字是 53 / 125 ms 量级，已随 ORT 改为复用共享后处理而统一。）
+
+一键本地离线回归（不需要相机 / IMU / CAN / 显示器）：
+
+```bash
+bash scripts/run_local_tests.sh            # 跑全部 7 个用例
+bash scripts/run_local_tests.sh 2 4        # 只跑第 2、4 个用例
+LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
+```
+
+| 用例 | 内容 | PASS 判定 |
+|---|---|---|
+| 1 | `planner_test_offline configs/demo.yaml`（纯规划） | 日志含 `Plan Yaw` |
+| 2 | `camera_test -c=configs/offline.yaml`（视频回放取流） | 日志含 `demo.avi` |
+| 3 | `dm_test -p=none`（无 IMU 回放模式） | 日志含 `z0.00 y0.00 x0.00` |
+| 4 | `auto_aim_test -e=60 -c=configs/offline.yaml`（检测+跟踪+规划，60 帧） | 退出码 0 且日志含 `yolo: xx.xms`；无显示环境时自动套 `xvfb-run`，两者都没有则 SKIP |
+| 5 | `detect_freq_visual_test -c=configs/detect_freq.yaml -m=bench -n=40`（检测频率/阶段耗时） | 日志含 `detect…avg`；先探一帧，本机没有任何可用推理后端（TensorRT / ONNX Runtime / OpenCV ≥ 4.9）时 SKIP 而不是 FAIL（`bench` 模式不开窗口，不需要显示环境） |
+| 6 | `detect_freq_visual_test -c=<临时派生 use_traditional: true 的配置> -m=bench -n=20`（传统方法二次矫正 Detector+Classifier） | 日志含 `use_traditional=true`（后端打印的启用消息）；配置由脚本 `sed` 从 `configs/detect_freq.yaml` 现场派生（不新增配置文件），同样先探一帧、缺推理后端时 SKIP |
+| 7 | `scripts/replay_ab.sh assets/demo/demo.avi -n=120 -e ort=yolov5_backend:ort -e dnn=yolov5_backend:dnn`（同录像 A/B：ORT vs `cv::dnn` 逐帧对比检测结果） | 脚本输出 `AB PASS`（rc=0）；可用后端少于 2 个（rc=2）时 SKIP；对比超差（rc=1）是 FAIL，详见 3.6.7 |
+
+退出码：`0` = 没有失败（SKIP 不计入失败），`1` = 有用例 FAIL，`2` = 环境不满足（缺 `build/`）。日志默认留在 `/tmp/sp_vision_local_tests/`，FAIL 时脚本会打印日志末尾 15 行。
+
+> 离线回放的既有行为：这份 demo 数据会让 EKF 中途发散，跟踪器会打印 `[Target] r=…, l=…` 与 `[Tracker] Target diverged!`，随后按 `Target::diverged()` 保护丢弃该目标并继续跑，不是回归。
+#### 3.6.6 检测频率可视化测试 + MindVision 相机参数（新增）
 
 **目的**：一次把「相机取流频率」与「识别链路频率」画在同一张图上，判断瓶颈在相机还是模型；接新相机时也是第一手验证工具。对应 AGENTS.md §8.7。
 
@@ -330,7 +379,6 @@ bash scripts/setup_x86_dev.sh -y
 | `-interval=<frames>` | `30` | 每多少帧打一次实时日志 / 存一次图 |
 | `-dump=<csv>` | 关 | 每帧每个装甲板一行（一致性对比用） |
 | `-save=<png>` | 关 | 把「画面 + 频率曲线」存图（SSH / 无 X 时检查用） |
-| `-stream=<port>` | `0`（关） | 起 MJPEG 直播（`/` 实时流、`/snapshot.jpg` 抓图）；无 X 机器上免显示看画面，见 3.6.6 |
 | `-no-yolo` | 关 | 不加载检测模型，只测取流/显示 |
 
 - **阶段划分**：`cap`（`camera.read()`，含等帧）/ `pre`（共享 letterbox 预处理）/ `detect`（`yolo.detect()` 全链路）/ `draw`（画框+曲线+imshow）。退出时打印各阶段 avg/p50/p95/max 与端到端帧率。
@@ -338,16 +386,6 @@ bash scripts/setup_x86_dev.sh -y
 - **降级不静默**：模型加载失败（如 `yolov5_backend: trt` 但本机没装 TensorRT）或 `forward()` 失败（OpenCV < 4.9）时会 `logger()->warn/error` 打印原因，并降级为「只测取流/显示」（HUD 上显示 `NO YOLO`），退出码仍为 0——方便先量相机侧频率。
 - ⚠️ **画面上只能写 ASCII**：`tools::draw_text` 用的是 `cv::putText`（Hershey 字体），中文会显示成 `????`；中文只放在 logger 输出里。
 - 本机没有可用后端时想验证工具本身：可以用一个「输出恒为 `[1,N,22]` 常量」的合成 ONNX 当桩模型（只用 Slice/Sub/Reshape/Add，OpenCV 4.5.x 也能 forward），此时画框 / CSV / 曲线 / 汇总全部会走到，只是坐标是编造的。
-
-**推理后端现状**（详见 AGENTS.md §4 / §8.5）：
-
-| `yolov5_backend` | 实现 | 前提 |
-|---|---|---|
-| `auto`（默认）/ `onnx_dnn` | `tasks/auto_aim/yolos/yolov5_onnx.cpp`（`cv::dnn`） | OpenCV ≥ 4.9/5.x；4.5.x 能 load 但 `forward()` 断言失败 |
-| `trt` | `tasks/auto_aim/yolos/yolov5_trt.cpp`（TensorRT 反序列化 `.engine`） | 先按 AGENTS.md §4.0 装 TensorRT，再用 `trtexec --fp16` 离线生成 `.engine`（**不入库**，默认路径 `assets/yolov5_0526_fp16.engine`，键 `yolov5_trt_engine_path`）；未装 TRT 时该后端编译为占位实现，构造即抛清晰异常 |
-| `openvino` | 已移除 | 本机无 OpenVINO 且规则禁用（AGENTS.md §0.4） |
-
-两个后端**共用** `tasks/auto_aim/yolos/yolov5_postprocess.{hpp,cpp}`（letterbox / sigmoid / parse / NMS / 名称与类型过滤 / center_norm 的唯一实现），避免行为漂移——§4.1.4 要求的一致性对比就是对比它。
 
 **MindVision 新增配置键**（都有默认值，已有 `configs/*.yaml` 行为不变）：
 
@@ -368,56 +406,52 @@ bash scripts/setup_x86_dev.sh -y
 
 > ⚠️ **两条现场坑**：① 同一枚相机只能被一个进程打开，`CameraInit` 返回 `-18`（设备已经打开）说明上次的程序没退干净，`pgrep -a` 杀掉再试；② **别用 `timeout` / `kill` 强杀相机进程**——`tools::Exiter` 只处理 `SIGINT`，`timeout` 默认发 `SIGTERM` 会跳过 `CameraUnInit`，把老 USB2.0 相机留在半开流状态（之后每次 open 都是「有效 0 / 丢帧 N」），等 1~2 分钟自恢复，或拔插一次 USB / 换 USB3.0 口。所以：交互调试用 Ctrl+C，脚本里用 `timeout -s INT`，或直接 `-n=<帧数>` 让它自己正常退出。
 
+#### 3.6.7 录制回放 + A/B 一致性基线（新增）
 
-#### 3.6.6 无显示器（headless）MJPEG 直播 + MindVision 固定 pipeline（新增）
+**目的**：把「真机识别效果」变成**可复核、可复跑**的证据——真机录一段 -> 离线回放 -> 在同一段画面上对比不同配置的检测结果。对应 AGENTS.md §4.1.4（合入前必须给一致性对比）与 §8.7。以前这种对比靠人工盯 `-dump` 的数字，容易漏也不可复跑，现在固定成脚本。
 
-对应 AGENTS.md §8.8。Jetson 装机后通常没有显示器（`DISPLAY` 为空，`cv::imshow` 直接抛异常），但现场调试必须能看到画面——所以给测试程序加了一条零第三方依赖的 MJPEG 直播。
+**① 录制（需要相机，`record_video` 开关）**：`record_video` / `record_fps` 是**新增 yaml 键**，默认 `false` / `30`，缺键时行为与之前**完全一致**（现有 `configs/*.yaml` 一个都不用改）。打开后相机帧 + 当时姿态经 `tools::Recorder` 落到 `records/<时间>.avi|txt`（`records*/` 已在 `.gitignore` 里）。三个程序读同一组键，按手上有什么选用：
 
-**① 直播（`-stream=<port>`）**
+| 程序 | 需要的硬件 | txt 里的姿态 |
+|---|---|---|
+| `./build/uav_debug -c=...` | 全链路（相机 + CBoard/IMU + can0） | 真实云台姿态 |
+| `./build/minimum_vision_system -c=...` | 只要相机（台架，不用 can0） | 真实姿态；`imu_name: "none"` 时是单位四元数 |
+| `./build/detect_freq_visual_test -c=... -m=bench -n=300` | 只要相机 + 推理后端（不需要标定） | **单位四元数（无意义），只取 avi** |
 
 ```bash
-./build/detect_freq_visual_test -c=configs/mv_sua133gc.yaml -m=live -stream=8080 -no-yolo
-# 另一台机器 / 本机：
-curl -s -o /tmp/snap.jpg http://127.0.0.1:8080/snapshot.jpg   # 脚本自检
-# 浏览器 / VLC / ffplay 打开：http://<本机IP>:8080/
+sed 's/^record_video: false/record_video: true/' configs/detect_freq.yaml >/tmp/rec.yaml
+./build/detect_freq_visual_test -c=/tmp/rec.yaml -m=bench -n=300   # -> records/2026-09-28_xx-xx-xx.avi
 ```
 
-启动日志会列出本机所有 IPv4 与对应 URL（实测 `lo` / `wlan0` `10.195.110.210` / `tailscale0` `100.65.141.79`）。实现是 `tools/mjpeg_server.{hpp,cpp}`（POSIX socket + `cv::imencode`）：
+**② A/B 对比（`scripts/replay_ab.sh` + `scripts/csv_ab.py`，纯标准库）**：把录像当输入，脚本**强制** `camera_name: "video"` + `video_loop: false`（基配置里的真机相机键被忽略），每个变体只改 yaml 里的一两个键：
 
-| 路径 | 行为 |
-|---|---|
-| `/`（或 `/index.html`） | `multipart/x-mixed-replace; boundary=frame` 实时流 |
-| `/snapshot.jpg` | 当前帧 JPEG（`Content-Length` 明确，方便脚本/`cv2.imread`） |
-| 其它（含 `/favicon.ico`） | `404`（不会"默默"返回一个视频流） |
-| 连接数 > 8 | `503` |
-
-- **不影响主链路**：`publish()` 只在有客户端时才做 JPEG 编码（没人看只花一次原子读）；每个客户端一个线程共享"最新一帧"，慢客户端只会丢帧；`SO_SNDTIMEO` + `MSG_NOSIGNAL` 保证客户端断开不会 `SIGPIPE` 杀掉视觉程序。实测（1280x1194 画布）：无客户端 `draw` 10.2 ms/帧、1 个客户端 16.1 ms/帧（JPEG80 编码 ≈6 ms），都小于相机帧间隔 28 ms → 端到端仍是相机瓶颈（取流 35.7 fps → 端到端 34.8 fps，不掉帧）。
-- **无 X 自动降级**：给了 `-stream` 而没显式给 `-d` 时自动关 imshow；即使 imshow 抛异常也只打一条 warn，程序继续跑。
-- 实测（Jetson Orin Nano）：监听 `0.0.0.0:8080`；`/snapshot.jpg` 200 + `image/jpeg`（175 KB，1280x1194 = 1024 画面 + 170 曲线面板，`ffd8ffe0` JPEG 头，`cv2.imread` 可解）；`/` 5 秒收到 31 MB multipart；`/nope`、`/favicon.ico` 均 404；`kill -INT` 后正常打印「直播服务已关闭」。
-
-**② 固定 pipeline（逐项显式置位 + 回读校验）**
-
-原来只设曝光 / 伽马 /（可选）数字增益，其余 ISP 参数（模拟增益、白平衡、色温、锐度、对比度、饱和度、抗闪、光源频率）沿用相机或 SDK 上一次会话留下的值——换机器或被官方演示程序动过，成像就会变。现在 `configs/mv_sua133gc.yaml` 里显式写了这些键（`mv_analog_gain` / `mv_clr_temp_mode` / `mv_clr_temp_gain` / `mv_sharpness` / `mv_contrast` / `mv_saturation` / `mv_anti_flick` / `mv_light_frequency`），`io::MindVision::open()` 按固定顺序下发，然后逐项 `CameraGet*` 回读打印 18 项：
-
-```
-[MindVision] ---------- 回读：本次实际生效参数 ----------
-[MindVision] 回读 分辨率 = 1280x1024（预设索引 0 1280X1024 Max）
-[MindVision] 回读 帧速模式 = 1            [MindVision] 回读 曝光时间 = 1996.197754 us
-[MindVision] 回读 模拟增益 = 64           [MindVision] 回读 伽马 = 50（百分之一）
-[MindVision] 回读 色温增益 = R 100 G 100 B 100   [MindVision] 回读 锐度 = 0
-[MindVision] 回读 对比度 = 100            [MindVision] 回读 饱和度 = 100
-[MindVision] 回读 抗闪 = 关               [MindVision] 回读 光源频率 = 50Hz
+```bash
+# 后端一致性（期望 AB PASS；基线见 AGENTS.md §8.5 = conf 差 5.8e-5 / 角点差 0.07px）
+bash scripts/replay_ab.sh assets/demo/demo.avi -n=120 -e ort=yolov5_backend:ort -e dnn=yolov5_backend:dnn
+# 反例自证（改了检出阈值就该被抓住，期望 AB FAIL）
+bash scripts/replay_ab.sh assets/demo/demo.avi -n=120 -e lo=min_confidence:0.8 -e hi=min_confidence:0.95
+# 真机片段也走同一条命令
+bash scripts/replay_ab.sh records/2026-09-28_12-00-00.avi -n=200 -e net=use_traditional:false -e trad=use_traditional:true
 ```
 
-连跑两次、把时间戳去掉后 `diff` 两份日志的"回读"块应为空（实测一致）——这就是"pipeline 已固定"的证据。
+| 选项 / 变体 | 默认 | 说明 |
+|---|---|---|
+| `[video.avi]` 或 `-v=<path>` | `assets/demo/demo.avi` | 录像路径（真机录制的 `records/*.avi` 直接放这里） |
+| `-c=<path>` | `configs/detect_freq.yaml` | 基配置；派生文件写在 `LOG_DIR` 里，不改仓库里的配置 |
+| `-n=<帧数>` | `120` | 每个变体跑多少帧；**不能超过录像帧数**（`video_loop: false` 读到尾会抛 `reached end of`，脚本会提示） |
+| `-t=<秒>` | `300` | 每个变体的限时 |
+| `-e <名字>=<键:值[,键:值...]>` | — | 一个变体（也接受 `-e=<...>`）；键不在基配置里时追加到派生 yaml 末尾；值原样写入，字符串请自带引号 |
 
-- ⚠️ **顺序有实测要求**：`CameraSetParameterMode` 会让 SDK 按参数表重载一次，把「自动曝光=开、曝光≈10ms、伽马=100」冲回默认。所以代码里 `setup_parameter_source()` 排在曝光设置**之前**，曝光 / 伽马又排在输出格式 / 帧速 / 分辨率**之后**（见 `io/mindvision/mindvision.cpp::open()`）。
-- ⚠️ 这枚相机不支持 `CameraSetWbMode` / `CameraSetFrameRate`（返回 `-4`），所以 `mv_wb_mode` / `mv_frame_rate` 别写（写了每次启动都告警）；这两项仍出现在回读里（白平衡=手动、期望帧率=0 Hz 不限速）。
-- **黄金方案**（跨机器复制成像）：`mv_parameter_save_file: "assets/mv_sua133gc_pipeline.config"` 退出存盘、`mv_parameter_file` 启动恢复；相关键还有 `mv_parameter_mode` / `mv_parameter_mask` / `mv_parameter_load_group` / `mv_parameter_save_group` / `mv_data_dir`。
-- **怎么验"写进去了"**：做一份故意与当前值不同的临时 yaml（如 `mv_analog_gain: 96` / `mv_sharpness: 5` / `mv_light_frequency: 1`）跑一次，回读变成新值即写入生效；只留单个键重跑能分辨"写不进去"与"被后续调用覆盖"。
+比较口径（`scripts/csv_ab.py`）：同一帧内按**中心距离最小贪心配对**（**不按 `armor_idx`**——那是各后端 NMS 之后的顺序，直接按序号配会误报）；「单侧检出帧」（一边有、一边没有）不为 0、标签（颜色/编号/类型）不一致、`max|Δconf| > 1e-2`、`max|Δpx| > 3.0` 任一成立即 `AB FAIL` 并打印样例。退出码：`0` = `AB PASS`；`1` = 有变体跑失败或对比超差；`2` = 可用变体少于 2 个（例如本机没有可用推理后端，`run_local_tests.sh` 用例 7 把 `2` 当 SKIP）。
+
+**实测（本机 WSL2 / x86_64，OpenCV 4.10.0 + ONNX Runtime 1.17.3，`assets/demo/demo.avi` 前 120 帧）**：
+
+- ORT vs `cv::dnn`：`AB PASS`（rc=0）。两边都有检出的帧 **102/120**，装甲板数量与颜色/编号/类型标签**完全一致**，`max|Δconf|` **9.7e-5**、`max|Δpx|` **0.10 px** —— 阈值（1e-2 / 3.0）比实测宽两个数量级，说明这条基线还有很大余量给 TensorRT FP16。
+- 反例 `min_confidence: 0.8` vs `0.95`：`AB FAIL`（rc=1），`0.8` 多出 **48** 个单侧检出帧（102 vs 54 帧有检出）——比较器不是恒 PASS 的空壳。
+
+⚠️ **真机录制这条路径本次没有验证**（手上没有相机）：只保证三个程序编译通过、默认 `record_video: false` 不改变既有行为；录制产物（MJPEG avi）的回放侧用的就是本机验证过的 `camera_name: "video"` 路径。
 
 ## 4 轨迹视角下的自瞄理论
-
 ### 4.1 引言
 在自瞄的研发和测试过程中，我们发现决策器和控制器是目前的短板。
 

@@ -15,6 +15,8 @@
 | 0.3 | 用 fmt 直接格式化 `std::chrono` 时间对象：`fmt::format("{:%Y-%m-%d}", std::chrono::system_clock::now())` | 见 §3.1：`strftime` 格式化到 `char[]`，再交给 `fmt::format` |
 | 0.4 | 引入或恢复 OpenVINO 运行时依赖：`ov::`、`core_.read_model()`、`compile_model()`、`find_package(OpenVINO REQUIRED)` | 见 §4：推理后端只能是 CUDA / TensorRT |
 | 0.5 | 为绕过编译错误而重写 `Armor` / `Solver` / EKF / TinyMPC 的上层算法逻辑 | 只做 API/类型适配，排错顺序见 §6.3 |
+| 0.6 | 干完活不提交 / 不推送；或把 `build/`、`logs/`、`third_party/`、`.vscode/`、`*.engine\|*.plan\|*.trt` 等产物混进提交 | 见 §9：每个可验证的工作单元一次聚焦 commit，并 `git push origin main` |
+| 0.7 | 对 `main` 做 `push --force` / `--force-with-lease`；rebase 已推送的提交；`reset --hard` 丢掉他人提交 | 见 §9.3：分叉先 `git fetch` 看清，默认 merge |
 
 ## 1. 环境与版本基线
 
@@ -121,14 +123,22 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
 ### 4.1 迁移要求
 - 本机**没有任何 OpenVINO 运行时**，所有推理必须面向 CUDA / TensorRT（TensorRT `.engine` / `.plan`，或自写 CUDA kernel）。
 - **待迁移清单**（现有 OpenVINO 代码，不要新增同类代码）：
-  - `tasks/auto_aim/yolos/yolov5.{cpp,hpp}`
+  - `tasks/auto_aim/yolos/yolov5.{cpp,hpp}`（原 OpenVINO 版；在 `tasks/auto_aim/CMakeLists.txt` 里注释着、不参与编译，能力已由 `yolov5_postprocess` + 三个后端文件覆盖）
   - `tasks/auto_aim/yolos/yolov8.{cpp,hpp}`
   - `tasks/auto_aim/yolos/yolo11.{cpp,hpp}`
-  - `tasks/auto_aim/classifier.{cpp,hpp}`
-  - `tasks/auto_aim/multithread/mt_detector.{cpp,hpp}`
   - `tasks/auto_buff/yolo11_buff.{cpp,hpp}`
   - 上述文件中的 `ov::Core`、`ov::CompiledModel`、`core_.read_model()`、`compile_model()` 需替换为 TensorRT 封装。
-  - 现状：`tasks/auto_aim/CMakeLists.txt` 已把 `classifier.cpp`、`detector.cpp`、`yolo.cpp`、`yolos/*.cpp`、`multithread/mt_detector.cpp` 注释掉（未参与编译）；但 `tasks/auto_buff/CMakeLists.txt` **仍在编译 `yolo11_buff.cpp`**，且 `buff_detector.hpp` / `buff_target.hpp` / `buff_aimer.hpp` 都直接 `#include "yolo11_buff.hpp"`，因此 `auto_buff` 目标当前**编译失败**——这是预期状态，不是回归。迁移时需同步放开上述源文件并接上 TensorRT；在此之前改动这些文件不会有完整编译反馈。
+  - **已迁移（不再含 `ov::` / `openvino.hpp`）**：`tasks/auto_aim/classifier.{cpp,hpp}`（删掉 `ov::Core` / `ov::CompiledModel` 成员与 `ovclassify()`，只留 `cv::dnn` 分类器）、`tasks/auto_aim/detector.{cpp,hpp}`、`tasks/auto_aim/multithread/mt_detector.{cpp,hpp}`，以及 `yolo.cpp` / `yolos/yolov5*`（共享后处理 + ONNX Runtime / OpenCV DNN / TensorRT 三个后端，见 §8.5）。
+  - 现状：全量 `make -C build/ -k` 现在**只剩一个失败构建单元 `auto_buff`**，唯一报错是
+    `tasks/auto_buff/yolo11_buff.hpp:7:10: fatal error: openvino/openvino.hpp: No such file or directory`
+    （`buff_detector.hpp` / `buff_target.hpp` / `buff_aimer.hpp` 都直接 `#include "yolo11_buff.hpp"`）；
+    可执行 `uav` 链接 `auto_buff` 因此也编不过。这是预期状态，不是回归——这两个目标之外的代码已有完整编译反馈。
+  - `use_traditional`（Detector + Classifier 二次矫正角点）已随迁移恢复：`YOLOBase::configure_traditional()`
+    （`yolo.{hpp,cpp}`）持有 `std::unique_ptr<Detector>`，`yolos/yolov5_postprocess.cpp::parse()` 在
+    `center_norm` 之前对每个存活检出调用 `traditional->detect(armor, bgr_img)`（与原 OpenVINO 版
+    `yolov5.cpp` 的顺序一致），ONNX Runtime / OpenCV DNN / TensorRT 三个后端都已接上。启用后需要
+    `configs/*.yaml` 里有传统方法那组键（`threshold` / `max_angle_error` / `min_lightbar_ratio` / …）
+    与 `classify_model`，缺失时构造抛带后端名的异常，**不会静默退化成“矫正没生效”**。
 - 迁移硬约束：
   1. **对外接口与类名不变**：`auto_aim::YOLO` / `YOLOV5` / `YOLOV8` / `YOLO11` 的构造签名
      `(const std::string & config_path, bool debug = false)` 与 `detect(...)` 返回类型保持不变。
@@ -183,10 +193,11 @@ ls /usr/include/aarch64-linux-gnu/NvInfer.h && trtexec --version   # 两个都�
 ```bash
 make -C build/ <target> -j$(nproc)
 ```
-`build/` 已配置的目标（ROS 未启用时约 80 个）。按实测（v1.1，在 Jetson 上以 `make -C build/ -k` 全量验证）分成两类：
+`build/` 已配置的目标（ROS 未启用时约 80 个）。按实测（v1.2，x86_64 / WSL2 上以 `make -C build/ -k` 全量验证，与 Jetson 同一份代码）分成两类：
 
-- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`、`detect_freq_visual_test`（§8.7）；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
-- **当前编译失败（依赖推理后端，属预期状态，见 §4）**：`uav`、`uav_debug`、`minimum_vision_system`、`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`、`auto_aim_test`、`camera_detect_test`、`camera_thread_test`、`usbcamera_detect_test`、`detector_video_test`。原因只有两类：缺 `<openvino/openvino.hpp>`（来自 `classifier.hpp` / `yolos/*.hpp` / `multithread/mt_detector.hpp` / `auto_buff/yolo11_buff.hpp`），或 `auto_aim::YOLO` 符号未参与编译。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成 TensorRT 迁移后再放开。
+- **实测编译通过**：可执行 `planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`gimbal_test`、`gimbal_response_test`、`dm_test`、`fire_test`、`handeye_test`、`cboard_test`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`capture`、`split_video`、`detect_freq_visual_test`（§8.7）、`camera_detect_test`、`detector_video_test`、`uav_debug`；库目标 `auto_aim`、`omniperception`、`tools`、`io`、`tinympcstatic`、`serial`。
+- **能编译链接、运行到检测才需要推理后端**（x86_64 / WSL2，取决于 `SPVISION_HAS_ORT`）：`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`。缺 ONNX Runtime 时会回退 `cv::dnn`，而 OpenCV < 4.9 的 `forward()` 会断言失败（§8.5）。
+- **当前编译失败（只剩 `auto_buff` 一条链路，属预期状态，见 §4.1）**：`auto_buff`、`auto_buff_test`、`auto_buff_debug_mpc`（`auto_buff/yolo11_buff.hpp`），以及链接 `auto_buff` 的 `uav`。报错只有一类：`fatal error: openvino/openvino.hpp`。**不要**为了让它们“编过”而注释逻辑或加临时桩；按 §4.1 完成迁移后再放开。
 
 - **不要**默认执行 `make -C build/` 全量编译；先编译受影响的最小 target。
 - 仅在必要时 `cmake -B build`；**不要删除 `build/`**（重新全量编译成本高）。
@@ -214,6 +225,7 @@ make -C build/ <target> -j$(nproc)
 - [ ] 无 `{{...}}` 初始化，矩阵/向量均为“先声明尺寸 + `<<`”（§0.2、§2.1）
 - [ ] 无 fmt 直接格式化 chrono，时间戳走 `strftime`（§0.3、§3.1）
 - [ ] 无新增/恢复 OpenVINO 依赖，推理走 CUDA / TensorRT（§0.4、§4）
+- [ ] 已按 §9 提交并推送，且回复中给出本地 / 远程 SHA 一致的证据（§9.3、§9.5）
 
 ## 8. 笔记本 / x86_64 开发机（Jetson 不在手上时）
 
@@ -239,13 +251,14 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 该脚本会：
 1. `apt install` OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann-json / libusb-1.0 / Ceres（Ceres 是 `tasks/auto_buff/CMakeLists.txt` 的 `find_package(Ceres REQUIRED)` 必需项）；
 2. 本地生成 `.vscode/eigen_fix.h`（`.vscode/` 被 `.gitignore` 忽略，且 §2.3 要求不提交，所以每台机器都要生成）；
-3. 编译「不依赖推理后端」的目标子集。
+3. 编译可移植目标子集（含端到端检测目标；`third_party/onnxruntime` 就位时自动启用 ORT 后端）。
 
 ### 8.3 当前可移植目标子集
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`
-- 依赖推理后端、当前无法编译的目标：见 §6.1（预期状态）。
-- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述子集，并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）。
+- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（§8.7）、`camera_detect_test`、`detector_video_test`、`uav_debug`
+- 端到端检测目标（`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`）能编译链接，**运行到检测时**需要可用后端（ORT 就位即真正跑，见 §8.5）。
+- 仍然无法编译的只剩 `auto_buff` / `auto_buff_test` / `auto_buff_debug_mpc` / `uav`（未迁移的 `auto_buff/yolo11_buff.hpp`）：见 §6.1。`classifier` / `detector` 在本轮（v1.2）已迁移完成——`camera_detect_test`、`detector_video_test`、`uav_debug` 从“编译失败”转为可编译。
+- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述 26 个目标（含新增的 `camera_detect_test` / `detector_video_test` / `uav_debug`），并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）、`camera_test -c=configs/offline.yaml`、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`。
 
 ### 8.4 离线回放（已实现，x86_64 / WSL2 可用）
 
@@ -266,7 +279,7 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 
 ### 8.5 推理后端现状（x86_64 / WSL2 与 Jetson）
 
-- **ONNX 后端（已实现）**：`tasks/auto_aim/yolos/yolov5_onnx.cpp` 用 `cv::dnn` 跑
+- **OpenCV DNN 后端（兜底，已实现）**：`tasks/auto_aim/yolos/yolov5_onnx.cpp` 用 `cv::dnn` 跑
   `assets/yolov5_0526.onnx`，`yolo.cpp` 按新增键 `yolov5_backend`（默认 `auto`）分发。
   预处理/后处理与 `yolos/yolov5.cpp::parse()` 完全一致（见 §4.2），无需 OpenVINO / TensorRT。
 - ⚠️ **OpenCV DNN 版本要求（实测）**：本机 OpenCV 4.5.4 **可以 load 但 `forward()` 会断言失败**
@@ -275,23 +288,52 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   已用 `onnx`(1.17, 隔离安装在 /tmp) 生成 FP32 版本 `0526_fp32.onnx`（数值逐位一致）验证：
   仍是同样的 forward 断言 → **结论是 OpenCV 4.5.x 的 DNN 跑不了这个图**。
   在 OpenCV ≥ 4.9/5.x 上该后端可用；本机（4.5.4）与 Ubuntu 22.04/24.04 的 `libopencv-dev`
-  （4.5.4/4.6）**不可用**，需要等下一个后端。
+  （4.5.4/4.6）**不可用**，需要 ORT 或 TensorRT 顶上；本机当前 WSL 实测 OpenCV **4.10.0**，
+  此版本 `cv::dnn` 与 ORT 都能跑。
 - **TensorRT 后端（已实现，等 §4.0 装 TensorRT 才能编）**：`tasks/auto_aim/yolos/yolov5_trt.cpp`
   在 `HAVE_TENSORRT` 宏后面用 TensorRT 反序列化 `.engine`，`yolo.cpp` 按 `yolov5_backend: "trt"`
   分发；引擎路径用新增键 `yolov5_trt_engine_path`（默认 `assets/yolov5_0526_fp16.engine`）。
   本机没装 TensorRT 时构造函数抛明确异常（不静默退化），头文件不含 `<NvInfer.h>`（PIMPL）。
 - **共享预处理/后处理**：`yolos/yolov5_postprocess.{hpp,cpp}` 是 letterbox / sigmoid / parse /
-  NMS / check_name / center_norm 的**唯一实现**，ONNX 与 TensorRT 两个后端都调它，避免行为漂移
-  （§4.1.4 的一致性对比就是对比它）。
-- **下一步（ONNX Runtime）**：笔记本若 OpenCV 太旧则走 ONNX Runtime（x86_64/aarch64 都有官方
-  预编译库）。在补上之前，`minimum_vision_system` / `auto_aim_test` / `camera_thread_test` /
-  `usbcamera_detect_test` 虽然能**编译链接**，但运行到检测时会抛异常退出。
+  NMS / check_name / center_norm 的**唯一实现**，`cv::dnn` / TensorRT / ONNX Runtime **三个**后端
+  都调它，避免行为漂移（§4.1.4 的一致性对比就是对比它）；ORT 侧只保留 Session 构造与
+  FP16/FP32 张量转换。
+- **ONNX Runtime 后端（已实现，x86_64 / WSL2 主力）**：`tasks/auto_aim/yolos/yolov5_ort.{hpp,cpp}`，
+  依赖 `third_party/onnxruntime`（`scripts/fetch_onnxruntime.sh` 下载，**不入库**），CMake 找到后定义
+  `SPVISION_HAS_ORT`；`yolo.cpp` 在 `auto` 下按 TRT → ORT → `cv::dnn` 选后端，启动日志打印真实选中的
+  那个。实测（`-dump=csv` 逐帧对比，本机 WSL2 / OpenCV 4.10.0 + ORT 1.17.3，`assets/demo/demo.avi`
+  前 40 帧）：ORT **38/40** 帧有检出、最高置信度 **0.968**、平均 **40.5 ms/帧**（p95 47.4）；
+  `cv::dnn` 同为 38/40 / 0.968、平均 **46.5 ms/帧**（p95 66.3）；两后端逐帧装甲板数量与
+  颜色/编号/类型标签**完全一致**，最大置信度差 **5.8e-5**、最大关键点像素差 **0.07 px**。
+- **Classifier / Detector 已迁移（v1.2）**：`classifier.{cpp,hpp}` 删掉了 `ov::Core` / `ov::CompiledModel`
+  成员与 `ovclassify()`，只留 `cv::dnn`（`classify_model`，默认 `assets/tiny_resnet.onnx`）；
+  `detector.{cpp,hpp}` 不再 include OpenVINO 头，只做编译期适配（`<numeric>` / `<ctime>`、
+  `fmt::format`、`strftime`、`ARMOR_NAMES[...]` 查名）。因此 `use_traditional` 可以恢复：
+  `YOLOBase::configure_traditional()`（`yolo.{hpp,cpp}`）+ `yolov5_postprocess::parse(..., Detector *)`。
+  实测：`configs/offline.yaml` 本身就是 `use_traditional: true` + 全套传统方法键，因此本地回归的
+  **用例 4（`auto_aim_test -e=60 -c=configs/offline.yaml`，检测→跟踪→规划 60 帧）已是这条路径的端到端验证**，
+  日志首行即 `[YOLOV5_ORT] use_traditional=true：已启用传统方法二次矫正角点（Detector+Classifier…）`。
+  另用 `configs/detect_freq.yaml` 派生 `use_traditional: true` 单测（WSL2 / ORT / `assets/demo/demo.avi`）：
+  bench 20 帧 `detect` 平均 **32.01 ms**（关掉时 40 帧为 **31.94 ms**）、退出码 0、18 个装甲板；用临时计数日志
+  （验证后已删除）确认 `Detector::detect(Armor&, img)` 恰好被调用 **18** 次 = 检出数。这份 demo 视频
+  的画面过不了传统方法的几何检查（`detect()` 返回 false），所以角点与关掉时逐帧一致
+  （`-dump=csv` 两份完全相同）——这是原实现的行为（矫正不成立就保留网络关键点），不是“没接上”。
+- **一致性对比已自动化**：`scripts/replay_ab.sh`（+ `scripts/csv_ab.py`，纯标准库）把「同一段录像、
+  只改 yaml 一个键」的 A/B 固化成脚本：强制 `camera_name: "video"` + `video_loop: false`，用
+  `detect_freq_visual_test -m=bench -dump=CSV` 跑每个变体，再逐帧比较（帧内按中心距离贪心配对，
+  **不按** `armor_idx`），「单侧检出帧 / 数量不一致 / 标签不一致 / `max|Δconf|` / `max|Δpx|`」任一
+  超阈值即 `AB FAIL`。`scripts/run_local_tests.sh` 用例 7 就是 ORT vs `cv::dnn` 这条（实测 `AB PASS`，
+  `max|Δconf|` 9.7e-5、`max|Δpx|` 0.10px）；反例自证 `-e lo=min_confidence:0.8
+  -e hi=min_confidence:0.95` → `AB FAIL`（单侧检出 48 帧）。变体输入可以是真机录制的片段，见 §8.7。
+- **仍然待补**：Jetson 侧 TensorRT 端到端回放（需按 §4.0 装 TensorRT 并离线生成 `.engine`）；
+  ORT 复用共享后处理已完成（三个后端现在只有推理调用点不同）；`record_video` 的**真机录制**路径
+  本机（无相机）未验证，只保证编译通过 + 默认关时行为不变。
 - `multithread/mt_detector` 已去掉 `ov::`（工作线程 + 队列，`push/pop/debug_pop` 接口不变），
   因此这几个 target 的编译不再依赖 OpenVINO。
 
 ### 8.6 仍然缺的降级（尚未实现）
 - `io::Gimbal`：打不开 `/dev/gimbal` 仍会 `exit(1)`（`io/gimbal/gimbal.cpp`）→ `planner_test` / `fire_test` / `gimbal_test` 在笔记本上跑不了（`planner_test_offline` 不受影响）。
-- `uav` / `uav_debug` / `minimum_vision_system` 已接入上述回放键，但在 §4 的 TensorRT 迁移完成前**无法编译**，所以笔记本上的端到端回放要等迁移完成。
+- `uav_debug` 已接入上述回放键，且随 `classifier` / `detector` 迁移完成（v1.2）已能编译；`uav` 仍因链接未迁移的 `auto_buff` 而编不过，所以笔记本上的端到端回放走 `minimum_vision_system` / `auto_aim_test`（ORT 就位即真正跑检测，见 §8.5）。
 
 ### 8.7 检测频率可视化测试 + MindVision USB2.0 相机（新增）
 
@@ -328,6 +370,18 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   所以：交互调试用 Ctrl+C，脚本里用 `timeout -s INT`，或直接 `detect_freq_visual_test -n=<帧数>`
   让它自己正常退出。守护线程重连间隔是递增的（0.3s→0.6s→…→5s 上限，恢复出图后重置），
   避免异常状态下每 100ms 疯狂 open/reset。
+- **录制开关（新增可选键）**：`record_video`（默认 `false`）/ `record_fps`（默认 `30`），`src/uav_debug.cpp`、
+  `tests/minimum_vision_system.cpp`、`tests/detect_freq_visual_test.cpp` 三个程序用
+  `tools::optional_bool` / `tools::optional_double`（§4.1.2 新增键约定：缺键返回默认值、**不** `exit`）读
+  同一组键；打开后相机帧 + 当时姿态经 `tools::Recorder` 落到 `records/<时间>.avi|txt`（`records*/` 已忽略）。
+  `detect_freq_visual_test` 没有姿态来源，txt 里写单位四元数（只取 avi）。⚠️ 真机录制路径本机（无相机）
+  未验证，只保证编译通过 + 默认 `false` 时行为与之前完全一致。
+- **A/B 基线脚本**：`scripts/replay_ab.sh <video.avi> [-c=<基配置>] [-n=<帧数>] -e <名>=<键:值> ...`
+  从基配置现场派生（`awk` 顶层键改写：有则替换、无则追加；强制 `camera_name: "video"` /
+  `video_loop: false`），每个变体先探针 1 帧（日志没有 `backend=` 且 `-n=1` 也跑不出检测就 SKIP），
+  再跑 bench + `-dump`，最后调 `scripts/csv_ab.py` 逐帧比较；退出码 `0` = AB PASS / `1` = AB FAIL /
+  `2` = 可用变体少于 2 个。`run_local_tests.sh` 用例 7 用它（ORT vs `cv::dnn`），实测见 §8.5。
+  ⚠️ `-n` 不能超过录像帧数：`video_loop: false` 读到尾会抛 `reached end of`（脚本会给这条提示）。
 
 ### 8.8 无显示器（headless）MJPEG 直播 + MindVision 固定 pipeline（新增）
 
@@ -389,10 +443,73 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 
 - `readme.md`：**纯英文**，目前只写「MindVision 相机 pipeline 的开启方式」（10 节：pipeline、
   依赖、编译、启动、headless 直播、回读一致性校验、`mv_*` 键表、排错、实测基线、相关文档）。
-- `readme_zh.md`：原完整中文 readme 的**逐字副本**（未删改），尚未移植的内容都还只在那里。
+- `readme_zh.md`：**完整中文 readme**（= 英文重写前那版的逐字内容 + 之后各轮新增的中文章节），
+  尚未移植到英文版的内容都只在那里；「英文重写前」的逐字快照在 git 历史 `ad75951`。
+- **merge 时的解冲突口径**：`readme.md` 冲突一律取英文版（`git checkout --ours readme.md`），
+  再把远端的中文 `readme.md` 覆盖到 `readme_zh.md`（`git show origin/main:readme.md > readme_zh.md`），
+  这样双方新增的文档都不丢。
 - 后续新增：面向英文读者的使用说明写 `readme.md`；中文说明写 `readme_zh.md`。两边都不要删掉
   §8.8.2 里那两条实测要求（`setup_parameter_source` 必须在曝光设置之前、`mv_wb_mode` /
   `mv_frame_rate` 本机不支持）。
 
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
+
+## 9. Git 提交与推送规则（交付即提交）
+
+> 与 §0.6 / §0.7、§6.2、§7 配套：**验证通过 → 提交 → 推送 → 报告 SHA** 是本仓库每轮任务的固定收尾动作，
+> 不要把未提交的改动留给用户手动处理。
+
+### 9.1 触发时机：一个工作单元一次提交
+- 一个「工作单元」= 一次可验证的改动：修一个 bug / 加一个后端 / 加一个测试或脚本 / 更新一处文档。
+- 判据：`make -C build/ <受影响 target> -j$(nproc)` 通过（§6.2）；涉及 x86 可移植目标时，优先再跑一次
+  `bash scripts/run_local_tests.sh`。
+- **同一轮回复内**完成 commit + push；不要攒批，不要以「等会儿一起提」为由留下改动。任务结束时
+  `git status` 必须是 `nothing to commit, working tree clean`（只剩被 `.gitignore` 忽略的文件）。
+
+### 9.2 提交（commit）
+- 提交前复核：`git status` + `git --no-pager diff --stat`，确认没有 `build/`、`logs/`、`third_party/`、
+  `.vscode/`、`*.engine` / `*.plan` / `*.trt` 等产物混入（§0.6）。用**指定路径** `git add`，不要
+  `git add -A` 盲加。
+- **身份必须先配好**（实测 local / global / system 三处都可能为空，不配则 commit 直接失败）：
+  ```bash
+  git config user.name  "koerimikan"
+  git config user.email "104670756+koerimikan@users.noreply.github.com"   # 与推送账号一致
+  ```
+  临时用 `git -c user.name=... -c user.email=... commit` 也算合规，但优先配置到仓库。
+- 信息格式（沿用本仓库既有实践）：首行 `<type>(<scope>): <中文摘要>`，`type` ∈
+  `feat|fix|port|build|test|docs|refactor|chore|merge`，`scope` 用模块名（`yolo` / `io` / `tools` / `scripts` /
+  `agents` …），摘要 ≤ 60 字；禁止 `update` / `fix bug` 之类无信息量标题。
+- 正文写清「改了什么 / 为什么 / **实测命令与结果**」，数字必须是真跑出来的（与 §6.2 同一要求）；
+  跨平台影响（Jetson / x86_64）要写明。
+- 一次提交只解决一个问题，diff 保持可审阅（§6.4）；不要把无关的格式化 / 重排混进来。
+
+### 9.3 推送（push）与分叉处理
+- 提交后立即 `git push origin main`（本仓库唯一长期分支，未启用 PR 流程）。
+- 被拒 / 远程有新提交时，**先看清再动手**：
+  ```bash
+  git fetch origin
+  git --no-pager log --oneline --left-right --graph main...origin/main
+  ```
+  - **默认策略：merge**（`git pull --no-rebase origin main`）——保留双方历史，冲突只解一遍；
+  - 仅当本地提交**尚未推送**、且明确要求线性历史时，才用 `git rebase origin/main`；
+  - **已推送的提交一律 merge，禁止 rebase**。
+- 解冲突用定点编辑（§6.4，禁止 `sed -i` / 脚本批量替换）；解完**必须重新执行 §6.2 的编译 / 运行验证**，
+  再提交（合并结果也是一次聚焦提交）并 push。
+- **禁止** `git push --force` / `--force-with-lease` 到 `main`；**禁止** `git reset --hard` 丢掉他人提交；
+  未经确认不得 `git clean -fd`。
+- push 后自检并汇报证据：`git --no-pager log --oneline -1 origin/main` 与本地 HEAD **SHA 一致**。
+
+### 9.4 仓库卫生
+- 不提交：`build/`、`third_party/`（由 `scripts/fetch_onnxruntime.sh` 按机器下载）、`logs/`、`.vscode/`
+  （含 `eigen_fix.h`，§2.3 要求不提交也不删除）、`*.engine` / `*.plan` / `*.trt`、`records*/`、
+  `CMakeCache.txt`、`compile_commands.json`。
+- 大文件（模型 / 引擎 / 视频）不新增；`assets/` 现有权重只在必要时更新，并在提交正文里写明来源与 md5
+  （§4.2；仓库保持 private）。
+- 需要暂存不完整的工作时用 `git stash`（留在本地），不要把半成品提交到 `main`。
+
+### 9.5 与其它章节的关系
+- §9.1 是 §7 自检清单的收尾项：§7 全部通过才算一个可提交的工作单元，commit + push 完成后该单元才算交付。
+- 与 §6.4「编辑纪律」一致：解冲突 / 合并同样使用定点编辑。
+- §0.6 / §0.7 是本节的硬约束版本：违反即视为无效输出。
+
 - [ ] `make -C build/ <target> -j$(nproc)` 实际编译通过（§6.1、§6.2）

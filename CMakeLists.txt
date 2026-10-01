@@ -19,6 +19,53 @@ find_package(nlohmann_json REQUIRED)
 # set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake/")
 # find_package(OpenVINO REQUIRED)
 
+# ---------------------------------------------------------------------------
+# ONNX Runtime（x86_64 / WSL2 开发机的可移植推理后端，见 AGENTS.md §8.5）
+#
+# 依赖由 scripts/fetch_onnxruntime.sh 下载到 third_party/onnxruntime（不入库）。
+# 找不到时不报错，只是不定义 SPVISION_HAS_ORT，检测后端回退 OpenCV DNN；
+# 这里刻意不用 find_path/find_library 的缓存结果，避免「先 configure 后下载 ORT」
+# 时缓存里残留的 NOTFOUND 把后端一直挡住。
+# 覆盖方式：cmake -B build -DSPVISION_ORT_ROOT=/path/to/onnxruntime  或  export ORT_DIR=...
+# ---------------------------------------------------------------------------
+set(SPVISION_ORT_ROOT "" CACHE PATH "ONNX Runtime 根目录（含 include/ 与 lib/）")
+
+set(_spvision_ort_hints "")
+if(SPVISION_ORT_ROOT)
+    list(APPEND _spvision_ort_hints "${SPVISION_ORT_ROOT}")
+endif()
+if(DEFINED ENV{ORT_DIR})
+    list(APPEND _spvision_ort_hints "$ENV{ORT_DIR}")
+endif()
+list(APPEND _spvision_ort_hints
+    "${PROJECT_SOURCE_DIR}/third_party/onnxruntime"
+    "/usr/local")
+
+set(SPVISION_ORT_INCLUDE_DIR "")
+set(SPVISION_ORT_LIBRARY "")
+foreach(_hint IN LISTS _spvision_ort_hints)
+    if(NOT SPVISION_ORT_INCLUDE_DIR AND EXISTS "${_hint}/include/onnxruntime_cxx_api.h")
+        file(GLOB _spvision_ort_libs "${_hint}/lib/libonnxruntime.so*")
+        if(_spvision_ort_libs)
+            set(SPVISION_ORT_INCLUDE_DIR "${_hint}/include")
+            set(SPVISION_ORT_LIBRARY "${_hint}/lib/libonnxruntime.so")
+            if(NOT EXISTS "${SPVISION_ORT_LIBRARY}")
+                list(GET _spvision_ort_libs 0 SPVISION_ORT_LIBRARY)
+            endif()
+        endif()
+    endif()
+endforeach()
+
+if(SPVISION_ORT_INCLUDE_DIR AND SPVISION_ORT_LIBRARY)
+    add_library(onnxruntime::onnxruntime SHARED IMPORTED)
+    set_target_properties(onnxruntime::onnxruntime PROPERTIES
+        IMPORTED_LOCATION "${SPVISION_ORT_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${SPVISION_ORT_INCLUDE_DIR}")
+    message(STATUS "ONNX Runtime found: ${SPVISION_ORT_LIBRARY}")
+else()
+    message(STATUS "ONNX Runtime NOT found (可选) -> 检测后端回退 OpenCV DNN")
+endif()
+
 include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})

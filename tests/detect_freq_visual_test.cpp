@@ -63,6 +63,8 @@
 #include "tools/math_tools.hpp"
 #include "tools/mjpeg_server.hpp"
 #include "tools/plotter.hpp"
+#include "tools/recorder.hpp"
+#include "tools/yaml.hpp"
 
 const std::string keys =
   "{help h usage ? |                             | 输出命令行参数说明}"
@@ -225,6 +227,23 @@ int main(int argc, char * argv[])
     if (!cli.has("display")) display = false;
   }
 
+  // 录制开关（yaml 新增可选键，默认 false，缺键时行为与之前完全一致，见 configs/detect_freq.yaml）：
+  //   record_video: true -> 相机帧录成 records/<时间>.avi（tools::Recorder，MJPEG）
+  // 作用是「有相机就能录一段」，之后派生 camera_name: "video" + video_path: records/xxx.avi
+  // 的配置离线回放，用 scripts/replay_ab.sh 做同一段画面上的 A/B。本程序没有姿态来源，
+  // txt 里的人机四元数是单位四元数（无意义），产物只取 avi。
+  auto cfg = tools::load(config_path);
+  auto record_video = tools::optional_bool(cfg, "record_video", false);
+  auto record_fps = tools::optional_double(cfg, "record_fps", 30.0);
+  std::unique_ptr<tools::Recorder> recorder;
+  if (record_video) {
+    recorder = std::make_unique<tools::Recorder>(record_fps);
+    tools::logger()->warn(
+      "record_video=true：录制到 records/（fps 上限 {:.1f}；txt 里的人机姿态是单位四元数，"
+      "仅 avi 有意义）",
+      record_fps);
+  }
+
   tools::Exiter exiter;
   tools::Plotter plotter;
 
@@ -283,6 +302,8 @@ int main(int argc, char * argv[])
     camera.read(img, timestamp);
     auto t1 = std::chrono::steady_clock::now();
     auto cap_ms = tools::delta_time(t1, t0) * 1000;
+
+    if (recorder) recorder->record(img, Eigen::Quaterniond::Identity(), timestamp);
 
     // 取流频率用相机给出的 timestamp（掉帧时会退化成处理频率）
     auto cam_dt = tools::delta_time(timestamp, last_timestamp);

@@ -41,7 +41,8 @@ jobs:
             fire_test gimbal_test gimbal_response_test handeye_test \
             capture split_video \
             calibrate_camera calibrate_handeye calibrate_robotworld_handeye \
-            detect_freq_visual_test
+            detect_freq_visual_test \
+            camera_detect_test detector_video_test uav_debug
 
       - name: Smoke test (planner_test_offline replay)
         run: |
@@ -92,3 +93,16 @@ jobs:
             exit "$rc"
           fi
           echo "detect_freq_visual_test ran OK (rc=$rc)"
+
+      - name: Smoke test (replay_ab.sh, A/B consistency baseline)
+        run: |
+          set +e
+          # 同录像 A/B：CI 的 OpenCV 4.5.4 跑不了这个 ONNX（§8.5），两个变体探针都失败 -> rc=2，
+          # 视为 SKIP；有可用后端时 rc=0（AB PASS）也通过。0 / 2 以外都算失败（1 = AB FAIL）。
+          bash scripts/replay_ab.sh assets/demo/demo.avi -n=30 \
+            -e ort=yolov5_backend:ort -e dnn=yolov5_backend:dnn >/tmp/replay_ab.log 2>&1
+          rc=$?
+          set -e
+          tail -n 20 /tmp/replay_ab.log
+          echo "replay_ab.sh rc=$rc"
+          [ "$rc" = "0" ] || [ "$rc" = "2" ]

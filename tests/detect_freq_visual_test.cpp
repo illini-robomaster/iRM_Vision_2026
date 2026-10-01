@@ -27,6 +27,15 @@
 // 注意：画面上的文字用 tools::draw_text（cv::putText / Hershey 字体），只能画 ASCII，
 //       如果要给 HUD 加中文会显示成 "????"；中文请只放在 logger 输出里。
 //
+// 没有显示器时怎么看画面（Jetson 现场 / SSH 远程，本机 DISPLAY 为空）：
+//   1) 首选内置 MJPEG 直播：加 -stream=8080，然后在这台机器的浏览器里打开
+//        http://<jetson-ip>:8080/           实时流（画面+频率曲线，和 imshow 内容完全一样）
+//        http://<jetson-ip>:8080/snapshot.jpg  抓当前一帧（脚本自检也用这个）
+//      程序启动时会把本机所有 IPv4 地址逐条打进日志（wlan0 / tailscale / lo 都能直接用）
+//      没有任何浏览器拉流时不做 JPEG 编码，对频率统计的影响接近 0
+//   2) 只想存图：-save=/tmp/shot.png
+//   3) 有 X 转发（ssh -X / WSLg）时按原来的 -d 用 imshow；cv::imshow 失败会自动降级并告警
+//
 // 没有 TensorRT / OpenCV < 4.9（本机 OpenCV 4.5.4 跑不了真模型）时怎么验证本工具：
 //       可以用一个"输出恒为 [1,N,22] 常量"的合成 ONNX 当桩模型（只用 Slice/Sub/Reshape/Add，
 //       OpenCV 4.5.x 也能 forward），此时画框 / CSV / 曲线 / 汇总全部会走到，只是坐标是编造的。
@@ -52,6 +61,7 @@
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/mjpeg_server.hpp"
 #include "tools/plotter.hpp"
 
 const std::string keys =
@@ -66,7 +76,9 @@ const std::string keys =
   "{dump           |                             | 把每帧检测结果写成 CSV（一致性对比用）}"
   "{save           |                             | 把可视化结果（画面+频率曲线）存成图片，每 "
   "interval 帧覆盖写一次（无显示/SSH 下检查用）}"
-  "{no-yolo        |                             | 不加载检测模型，只测取流/显示频率}";
+  "{no-yolo        |                             | 不加载检测模型，只测取流/显示频率}"
+  "{stream         | 0                           | MJPEG 直播端口（0=关）。headless / SSH 下用浏览器看实时画面："
+  "http://<jetson-ip>:<端口>/（实时流）、/snapshot.jpg（抓一帧）}";
 
 // 滑动窗口统计（只保留最近 window 帧，长时间运行不会一直涨内存）
 class WindowStats
@@ -204,6 +216,15 @@ int main(int argc, char * argv[])
   if (mode != "live" && n_frames == 0) n_frames = 300;
   auto display = mode == "bench" ? cli.has("display") : true;
 
+  // MJPEG 直播（headless 环境下的"显示器"）：-stream=0（默认）表示关闭。
+  // 开了直播且没显式要求 -d 时不再开 imshow 窗口（无 X 环境下 imshow 只会抛异常）
+  auto stream_port = cli.get<int>("stream");
+  std::unique_ptr<tools::MjpegServer> stream;
+  if (stream_port > 0) {
+    stream = std::make_unique<tools::MjpegServer>(stream_port);
+    if (!cli.has("display")) display = false;
+  }
+
   tools::Exiter exiter;
   tools::Plotter plotter;
 
@@ -223,8 +244,8 @@ int main(int argc, char * argv[])
   }
 
   tools::logger()->info(
-    "mode={} frames={} display={} window={} interval={} yolo={}", mode, n_frames, display, window,
-    interval, yolo ? "on" : "off");
+    "mode={} frames={} display={} stream_port={} window={} interval={} yolo={}", mode, n_frames,
+    display, stream_port, window, interval, yolo ? "on" : "off");
 
   WindowStats cap_stat(window), pre_stat(window), detect_stat(window), draw_stat(window),
     proc_stat(window), cam_fps_stat(window);
@@ -297,7 +318,7 @@ int main(int argc, char * argv[])
     // ---------------- draw：画框 + 指标 + 曲线 + imshow ----------------
     auto t3 = std::chrono::steady_clock::now();
     bool user_quit = false;
-    if (display || !save_path.empty()) {
+    if (display || !save_path.empty() || stream) {
       auto canvas = img.clone();
       for (const auto & armor : armors) {
         tools::draw_points(canvas, armor.points, {0, 255, 0});
@@ -350,10 +371,22 @@ int main(int argc, char * argv[])
         cv::imwrite(save_path, shown);
       }
 
+      // 直播推流：没有客户端时只花一次原子读，不影响 draw 阶段的频率统计
+      if (stream) stream->publish(shown);
+
       if (display) {
-        cv::imshow("detect_freq", shown);
-        auto key = cv::waitKey(1);
-        if (key == 'q' || key == 27) user_quit = true;
+        try {
+          cv::imshow("detect_freq", shown);
+          auto key = cv::waitKey(1);
+          if (key == 'q' || key == 27) user_quit = true;
+        } catch (const cv::Exception & e) {
+          // 无 DISPLAY（SSH / CI / 没接 X 的 Jetson）时 imshow 会抛异常：明确告警后关掉显示，
+          // 取流与频率统计照旧（不静默退化）。要看画面就用 -stream=<端口>
+          tools::logger()->warn(
+            "cv::imshow 失败，已关闭显示（无 X 显示环境？改用 -stream=<端口> 用浏览器看直播）: {}",
+            e.what());
+          display = false;
+        }
       }
     }
     auto t4 = std::chrono::steady_clock::now();

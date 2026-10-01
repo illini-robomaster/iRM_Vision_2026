@@ -17,6 +17,7 @@ add_library(tools OBJECT
     logger.cpp
     pid.cpp
     crc.cpp
+    mjpeg_server.cpp
 )
 
 target_link_libraries(tools PUBLIC Threads::Threads)

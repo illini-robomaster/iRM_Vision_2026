@@ -329,5 +329,70 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
   让它自己正常退出。守护线程重连间隔是递增的（0.3s→0.6s→…→5s 上限，恢复出图后重置），
   避免异常状态下每 100ms 疯狂 open/reset。
 
+### 8.8 无显示器（headless）MJPEG 直播 + MindVision 固定 pipeline（新增）
+
+#### 8.8.1 MJPEG 直播（`-stream=<port>`，零第三方依赖）
+
+- 实现：`tools/mjpeg_server.{hpp,cpp}`（POSIX socket + `cv::imencode`），已列入
+  `tools/CMakeLists.txt` 的 OBJECT 库源文件。路由：`/` = `multipart/x-mixed-replace` 实时流，
+  `/snapshot.jpg` = 当前帧 JPEG，其它路径（含浏览器自动请求的 `/favicon.ico`）= 404，
+  连接数超 8 → 503。
+- `detect_freq_visual_test -stream=<port>`：`port > 0` 即启服务；**没显式给 `-d` 时自动关 imshow**
+  （无 X 机器上不再抛异常）。`publish()` 只在有客户端时才 `imencode`，没人看只花一次原子读，
+  对频率统计无影响；慢客户端只丢帧、不拖慢主链路（每客户端一个线程 + `SO_SNDTIMEO` +
+  `MSG_NOSIGNAL`，客户端断开不会 SIGPIPE 杀掉整个进程）。
+- 实测开销（1280x1194 画布）：无客户端 `draw` 10.2 ms/帧；1 个客户端 16.1 ms/帧（JPEG 质量 80
+  的编码 ≈6 ms）。两者都小于相机帧间隔 28 ms（35.7 fps），所以端到端仍是相机瓶颈：
+  取流 35.7 fps → 端到端 34.8 fps，不掉帧。
+- 用法（本机实测）：
+  ```bash
+  ./build/detect_freq_visual_test -c=configs/mv_sua133gc.yaml -m=live -stream=8080 -no-yolo
+  curl -s -o /tmp/snap.jpg http://127.0.0.1:8080/snapshot.jpg   # 脚本自检
+  # 浏览器 / VLC / ffplay：http://<本机IP>:8080/
+  ```
+  启动日志会列出本机所有 IPv4（`lo` / `wlan0` / `tailscale0` …）与对应 URL。实测（Jetson Orin Nano）：
+  监听 `0.0.0.0:8080`；`/snapshot.jpg` 200 + `image/jpeg`（175 KB，1280x1194 = 1024 画面 +
+  170 曲线面板）；`/` 5 秒收到 31 MB multipart 数据；`/nope`、`/favicon.ico` 均 404；退出打印
+  「直播服务已关闭」。
+- 无 X 环境下 `cv::imshow` 抛异常（`DISPLAY` 为空）现在被捕获 → 退化「不显示」+ 一条 warn，
+  程序继续跑（配合 `-stream` / `-save` 看画面）。
+
+#### 8.8.2 MindVision 固定 pipeline（逐项显式置位 + 回读校验）
+
+- 为什么需要：原来只设 曝光 / 伽马 /（可选）数字增益，其余 ISP 参数沿用相机或 SDK 上一次会话
+  留下的值 —— 换机器、或被官方演示程序动过，成像会悄悄变，标定与阈值跟着漂。
+- 新增键（都有默认值，`-1` / 空 = 不改，已有 `configs/*.yaml` 行为不变）：`mv_analog_gain`、
+  `mv_wb_mode`、`mv_clr_temp_mode`、`mv_clr_temp_gain`（`"R,G,B"`）、`mv_once_wb`、`mv_sharpness`、
+  `mv_contrast`、`mv_saturation`、`mv_anti_flick`、`mv_light_frequency`、`mv_frame_rate`；
+  参数来源：`mv_data_dir`、`mv_parameter_mode`、`mv_parameter_mask`、`mv_parameter_load_group`、
+  `mv_parameter_file`、`mv_parameter_save_file`、`mv_parameter_save_group`。
+- **顺序是实测要求，别改**：`setup_parameter_source()`（data_dir / mode / mask / 从文件或参数组加载）
+  → 输出格式 / 触发 / 帧速 / 增益 / 分辨率 → **曝光 / 伽马** → `apply_pipeline()`（模拟增益、白平衡、
+  色温、锐度、对比度、饱和度、抗闪、光源频率、帧率）→ `log_effective_settings()` 逐项回读。
+  原因（实测）：`CameraSetParameterMode` 会让 SDK 按参数表重载一次，把「自动曝光=开、曝光≈10ms、
+  伽马=100」冲回默认；曝光侧排在它之后才不会被静默覆盖（回读日志能直接看出来）。
+- 校验：启动日志 `回读 ...` 一段 18 项（分辨率 / 帧速 / 输出格式 / 触发 / 期望帧率 / 自动曝光 /
+  曝光时间 / 模拟增益 / 数字增益 / 伽马 / 白平衡模式 / 色温模式 / 色温增益 / 锐度 / 对比度 /
+  饱和度 / 抗闪 / 光源频率）。连跑两次、去掉时间戳后 `diff` 应为空。
+- 本机实测（MV-SUA133GC）：`configs/mv_sua133gc.yaml` 已固定 `mv_analog_gain=64`、
+  `mv_clr_temp_mode=1`、`mv_clr_temp_gain="100,100,100"`、`mv_sharpness=0`、`mv_contrast=100`、
+  `mv_saturation=100`、`mv_anti_flick=0`、`mv_light_frequency=0`；两次启动回读逐行一致。
+  `mv_wb_mode` / `mv_frame_rate` 在这枚相机上 `CameraSet*` 返回 `-4`（机型不支持），**别写**
+  （写了每次启动都告警）；这两项仍会出现在回读里（白平衡=手动、期望帧率=0 Hz 不限速）。
+- 黄金方案（跨机器复制成像）：`mv_parameter_save_file: "xxx.config"` 退出时存盘（实测 74 KB），
+  `mv_parameter_file` 启动时恢复。存/取文件走的正是上面那条"会重载"的路径，顺序依旧是关键。
+- **写入生效性怎么验**（本次就是靠它定位）：做一份"故意与当前值不同"的临时 yaml
+  （如 `mv_analog_gain: 96` / `mv_sharpness: 5` / `mv_light_frequency: 1`），跑一次看回读是否变成
+  新值；再单独只留一个键，就能分辨是"写不进去"还是"被后面的调用覆盖了"。
+
+### 8.9 文档分工（readme）
+
+- `readme.md`：**纯英文**，目前只写「MindVision 相机 pipeline 的开启方式」（10 节：pipeline、
+  依赖、编译、启动、headless 直播、回读一致性校验、`mv_*` 键表、排错、实测基线、相关文档）。
+- `readme_zh.md`：原完整中文 readme 的**逐字副本**（未删改），尚未移植的内容都还只在那里。
+- 后续新增：面向英文读者的使用说明写 `readme.md`；中文说明写 `readme_zh.md`。两边都不要删掉
+  §8.8.2 里那两条实测要求（`setup_parameter_source` 必须在曝光设置之前、`mv_wb_mode` /
+  `mv_frame_rate` 本机不支持）。
+
 - [ ] `Armor` / `Solver` / EKF / TinyMPC 签名与算法逻辑未变（§5）
 - [ ] `make -C build/ <target> -j$(nproc)` 实际编译通过（§6.1、§6.2）

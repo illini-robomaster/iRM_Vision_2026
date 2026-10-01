@@ -1,4 +1,4 @@
-# AGENTS.md — sp_vision_25 开发约束（Jetson / aarch64）
+# AGENTS.md — iRM-Vision-2026 开发约束（Jetson / aarch64）
 
 > 本文件是本仓库所有 agent 约束的**唯一正文**。`.clinerules/` 内只有一行引用，请勿在其中重复或修改规则。
 > 适用范围：本仓库内所有代码生成、修改、重构与编译验证。
@@ -237,11 +237,15 @@ make -C build/ <target> -j$(nproc)
   - `io/socketcan.hpp` 依赖 `<linux/can.h>` / `<sys/epoll.h>`（`io/cboard.cpp` 链路）；
   - MindVision / HikRobot SDK 只提供 Linux `.so`（仓库内已有 `lib/amd64` 与 `lib/arm64`）。
 - **WSL2 补充**（Windows + WSL2 是最常见的笔记本形态）：
-  - 仓库**必须 clone 到 WSL 的 ext4 文件系统**（如 `~/sp_vision_25`），不要放 `/mnt/c/...`：跨 9p 文件系统编译会慢一个数量级，且文件事件/权限行为异常。
+  - 仓库**必须 clone 到 WSL 的 ext4 文件系统**（如 `~/iRM-Vision-2026`），不要放 `/mnt/c/...`：跨 9p 文件系统编译会慢一个数量级，且文件事件/权限行为异常。
   - USB 设备（工业相机 / UVC 相机 / 达妙 IMU 串口 / USB2CAN）不会自动出现在 WSL 里，需要 Windows 侧 `usbipd-win` + `usbipd attach`；不接硬件时走 §8.4 的回放模式。
   - GUI（`cv::imshow`）需要 WSLg（Win11 或已更新的 Win10）；没有 WSLg 就用 `ssh -X` / VcXsrv，或干脆不加 `-d display`。
   - WSL 里没有 `can0` 硬件，但 `io::CBoard` 打开失败只 `logger()->warn`（`io/socketcan.hpp` 的 `try_open`），不会退出，不影响纯视觉链路。
 - 不要在机器之间复用 `build/`：`CMakeCache.txt` 记录了编译器（`/usr/bin/aarch64-linux-gnu-g++`）与库路径（`/usr/lib/aarch64-linux-gnu/...`）。每台机器各自 `cmake -B build`。
+- 本机（Jetson）工作目录已改名为 `/home/irm/iRM-Vision-2026`；旧名 `/home/irm/sp_vision_25` 保留为指向它的
+  **符号链接**，因为 `build/CMakeCache.txt` 里的 `CMAKE_HOME_DIRECTORY` 是旧绝对路径（实测：留着链接时
+  `make -C build/ detect_freq_visual_test` 仍打印 `Built target` 且不重编）。删掉该链接就必须
+  `rm -rf build && cmake -B build`（全量重编）才能再用 `build/`。
 - 笔记本上 Eigen 3.4 / fmt 8+ / spdlog 1.9+ 都能编过（本仓库代码按 3.3.7 / fmt 6 兼容写法编写，向上兼容），但**基线仍是 Jetson 上的 Eigen 3.3.7 + fmt 6.1.2 + spdlog 1.5**，新增代码必须两边都能编。
 
 ### 8.2 环境准备与构建

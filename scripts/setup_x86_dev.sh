@@ -23,7 +23,7 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
     /mnt/*)
       echo "  !! 仓库位于 /mnt/...（Windows 驱动器）。跨 9p 文件系统编译极慢且文件事件异常，"
       echo "     建议移到 WSL 自己的 ext4 上重新 clone，例如："
-      echo "       git clone <url> ~/sp_vision_25 && cd ~/sp_vision_25 && bash scripts/setup_x86_dev.sh -y"
+      echo "       git clone <url> ~/iRM-Vision-2026 && cd ~/iRM-Vision-2026 && bash scripts/setup_x86_dev.sh -y"
       ;;
   esac
   echo "  - 提示：WSL 内默认没有 USB 设备（工业相机 / UVC 相机 / 达妙 IMU / USB2CAN）。"

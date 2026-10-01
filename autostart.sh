@@ -1,5 +1,5 @@
 sleep 5
-cd ~/Desktop/sp_vision_25/
+cd ~/Desktop/iRM-Vision-2026/
 screen \
     -L \
     -Logfile logs/$(date "+%Y-%m-%d_%H-%M-%S").screenlog \

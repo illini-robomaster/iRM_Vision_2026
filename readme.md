@@ -1,4 +1,4 @@
-# sp_vision_25 - Camera Pipeline Bring-up (MindVision)
+# iRM-Vision-2026 - Camera Pipeline Bring-up (MindVision)
 
 > **Scope of this file.** For now this README documents exactly **one** path: bringing up the
 > **MindVision camera pipeline** and proving that the imaging pipeline is *pinned* (every ISP

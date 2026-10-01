@@ -56,6 +56,57 @@ struct MindVisionConfig
 
   // mv_usb_reset：掉线时是否先用 libusb 复位设备再重连（默认 true，与移植前一致）
   bool usb_reset = true;
+
+  // ---------------------------------------------------------------------------
+  // 固定 pipeline（AGENTS.md §8.8）
+  //
+  // 为什么需要：移植后的 open() 只设了 曝光 / 伽马 /（可选）数字增益，其余 ISP 参数
+  // （模拟增益、白平衡、色温、锐度、对比度、饱和度、抗闪、光源频率）全部沿用相机或
+  // SDK 上一次会话留下的值 —— 也就是说换台机器、或者被别的程序（MindVision 官方
+  // 演示程序）动过之后，成像会悄悄变化，标定与阈值就跟着漂。
+  //
+  // 现在：凡是在 yaml 里显式写了的键，open() 都会按固定顺序置位，然后逐项 CameraGet*
+  // 回读并打到日志里（可直接 diff 两次启动的日志确认一致）；没写（-1 / 空）的键保持
+  // "不改"，所以已有 configs/*.yaml 的行为不变。
+  // ---------------------------------------------------------------------------
+  // mv_data_dir：SDK 数据目录（参数文件 .config / 设备参数 .mvdat 的存放位置），
+  //              空 = 不调用 CameraSetDataDirectory（保持 SDK 默认，即当前工作目录下的 Camera/）
+  std::string data_dir = "";
+
+  // 参数存取对象：0 按型号 / 1 按昵称 / 2 按序列号 / 3 相机内置存储，-1 = 不改
+  int parameter_mode = -1;
+  // CameraSetParameterMask 的掩码（位 = PROP_SHEET_INDEX_*，0..16），-1 = 不改。
+  // 想"存/取全部参数"就用 0x1FFFF（bit0~bit16 全置位）
+  int parameter_mask = -1;
+  // 从参数组加载：0..3 = A/B/C/D，255 = 出厂默认，-1 = 不加载
+  int parameter_load_group = -1;
+  // 从文件加载整组参数（.config / .mvdat），空 = 不加载
+  std::string parameter_file = "";
+  // 退出（析构）时把当前参数存成文件 —— 用来产出"黄金方案"，跨机器复制
+  std::string parameter_save_file = "";
+  // 退出（析构）时把当前参数存进相机/SDK 的 A/B/C/D 参数组，-1 = 不保存
+  int parameter_save_group = -1;
+
+  // mv_analog_gain：模拟增益（SDK 设定值，100 = 1.0 倍），-1 = 不改
+  int analog_gain = -1;
+  // mv_wb_mode：0 = 手动白平衡 / 1 = 自动白平衡，-1 = 不改
+  int wb_mode = -1;
+  // mv_clr_temp_mode：0 = 自动识别色温 / 1 = 预设色温 / 2 = 自定义色温，-1 = 不改
+  int clr_temp_mode = -1;
+  // mv_clr_temp_gain：自定义色温增益，格式 "R,G,B"（0~400，100 = 1.0 倍），空 = 不改
+  std::string clr_temp_gain = "";
+  // mv_once_wb：置位后做一次白平衡（手动白平衡下用它把当前光色对齐）
+  bool once_wb = false;
+  // mv_sharpness / mv_contrast / mv_saturation：-1 = 不改
+  int sharpness = -1;
+  int contrast = -1;
+  int saturation = -1;
+  // mv_anti_flick：抗闪 0 = 关 / 1 = 开，-1 = 不改
+  int anti_flick = -1;
+  // mv_light_frequency：光源频率 0 = 50Hz / 1 = 60Hz，-1 = 不改（室内灯光下必须与电网一致）
+  int light_frequency = -1;
+  // mv_frame_rate：期望输出帧率（Hz），-1 = 不改（部分型号不支持，设置失败会告警）
+  int frame_rate = -1;
 };
 class MindVision : public CameraBase
 {
@@ -101,7 +152,16 @@ private:
   int select_device(const std::vector<tSdkCameraDevInfo> & devices) const;
   // 打印相机能力：分辨率预设 / 帧速模式 / 输出格式（选参数全靠它）
   void log_capability(const tSdkCameraCapbility & cap) const;
-  // 打印本次实际生效的参数（分辨率、帧速模式、输出格式、增益）
+  // 参数来源（固定 pipeline 第一步）：data_dir / 参数存取对象 / 掩码 / 从文件或参数组加载
+  void setup_parameter_source();
+  // 固定 pipeline 第二步：按固定顺序逐项置位（模拟增益、白平衡、色温、锐度、对比度、
+  // 饱和度、抗闪、光源频率、帧率）。只有 yaml 里显式写了（!= -1 / 非空）的项才动，
+  // 每一项失败都会告警（不静默忽略）
+  void apply_pipeline(const tSdkCameraCapbility & cap);
+  // 固定 pipeline 第三步（可选）：退出时把当前参数存成文件 / 存进参数组，产出"黄金方案"
+  void save_pipeline() const;
+  // 打印本次实际生效的参数（逐项 CameraGet* 回读：分辨率、帧速、输出格式、曝光、
+  // 增益、白平衡、色温、锐度、对比度、饱和度、抗闪、光源频率、帧率、触发模式）
   void log_effective_settings() const;
   // 用 libusb 查这枚相机协商到的 USB 链路速度并记到 usb_link_speed_
   void log_usb_link();

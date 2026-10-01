@@ -37,6 +37,35 @@ Camera::Camera(const std::string & config_path)
       yaml["mv_frame_timeout_ms"] ? yaml["mv_frame_timeout_ms"].as<int>() : 1000;
     config.usb_reset = yaml["mv_usb_reset"] ? yaml["mv_usb_reset"].as<bool>() : true;
 
+    // 固定 pipeline 相关键（AGENTS.md §8.8）：全部有默认值，缺失 = 不改（保持旧行为）。
+    // 凡是在 yaml 里写了的，open() 会按固定顺序显式置位，并逐项回读打日志
+    config.data_dir = yaml["mv_data_dir"] ? yaml["mv_data_dir"].as<std::string>() : std::string("");
+    config.parameter_mode = yaml["mv_parameter_mode"] ? yaml["mv_parameter_mode"].as<int>() : -1;
+    config.parameter_mask = yaml["mv_parameter_mask"] ? yaml["mv_parameter_mask"].as<int>() : -1;
+    config.parameter_load_group =
+      yaml["mv_parameter_load_group"] ? yaml["mv_parameter_load_group"].as<int>() : -1;
+    config.parameter_file =
+      yaml["mv_parameter_file"] ? yaml["mv_parameter_file"].as<std::string>() : std::string("");
+    config.parameter_save_file =
+      yaml["mv_parameter_save_file"] ? yaml["mv_parameter_save_file"].as<std::string>()
+                                     : std::string("");
+    config.parameter_save_group =
+      yaml["mv_parameter_save_group"] ? yaml["mv_parameter_save_group"].as<int>() : -1;
+
+    config.analog_gain = yaml["mv_analog_gain"] ? yaml["mv_analog_gain"].as<int>() : -1;
+    config.wb_mode = yaml["mv_wb_mode"] ? yaml["mv_wb_mode"].as<int>() : -1;
+    config.clr_temp_mode = yaml["mv_clr_temp_mode"] ? yaml["mv_clr_temp_mode"].as<int>() : -1;
+    config.clr_temp_gain =
+      yaml["mv_clr_temp_gain"] ? yaml["mv_clr_temp_gain"].as<std::string>() : std::string("");
+    config.once_wb = yaml["mv_once_wb"] ? yaml["mv_once_wb"].as<bool>() : false;
+    config.sharpness = yaml["mv_sharpness"] ? yaml["mv_sharpness"].as<int>() : -1;
+    config.contrast = yaml["mv_contrast"] ? yaml["mv_contrast"].as<int>() : -1;
+    config.saturation = yaml["mv_saturation"] ? yaml["mv_saturation"].as<int>() : -1;
+    config.anti_flick = yaml["mv_anti_flick"] ? yaml["mv_anti_flick"].as<int>() : -1;
+    config.light_frequency =
+      yaml["mv_light_frequency"] ? yaml["mv_light_frequency"].as<int>() : -1;
+    config.frame_rate = yaml["mv_frame_rate"] ? yaml["mv_frame_rate"].as<int>() : -1;
+
     camera_ = std::make_unique<MindVision>(config);
   }
 

@@ -253,8 +253,14 @@ demo frames matched a Python OpenCV 5.0 ONNX reference: 55 detected frames on bo
 counts and labels, maximum confidence difference 0.00321 and maximum corner-coordinate difference
 2.47 pixels (existing limits: 0.01 and 3 pixels). A 120-frame camera run with snapshot saving measured
 23.63 ms average detection time and 31.24 fps end to end; capture reported 165 valid frames and zero
-drops. A snapshot request returned HTTP 200. The camera viewed a desk without a visible armor target,
-so real-target accuracy still requires presenting an armor plate to the camera. Engine files are local
+drops. A snapshot request returned HTTP 200. This initial benchmark viewed a desk without a visible
+armor target.
+
+**Real-target confirmation (October 3, 2026):** after testing armor plates with the live camera
+detection stream, the user reported that recognition worked very well. This confirms successful
+real-target use of the MindVision -> TensorRT -> annotated MJPEG stream. It is qualitative user
+feedback, not a measured precision/recall result or a validation across all distances and lighting
+conditions. The benchmark numbers above remain from the initial run. Engine files are local
 artifacts and must not be committed.
 
 ## 11. Related documents

@@ -53,14 +53,16 @@ find_path(CUDART_INCLUDE_DIR cuda_runtime_api.h
           /usr/local/cuda/include /usr/local/cuda/targets/aarch64-linux/include /usr/include)
 find_library(NVINFER_LIB nvinfer
     PATHS /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /usr/lib)
+find_library(NVINFER_PLUGIN_LIB nvinfer_plugin
+    PATHS /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /usr/lib)
 find_library(CUDART_LIB cudart
     PATHS /usr/local/cuda-11.4/lib64 /usr/local/cuda-11.4/targets/aarch64-linux/lib
           /usr/local/cuda/lib64 /usr/lib/aarch64-linux-gnu)
 
-if(NVINFER_INCLUDE_DIR AND CUDART_INCLUDE_DIR AND NVINFER_LIB AND CUDART_LIB)
+if(NVINFER_INCLUDE_DIR AND CUDART_INCLUDE_DIR AND NVINFER_LIB AND NVINFER_PLUGIN_LIB AND CUDART_LIB)
     message(STATUS "TensorRT found: ${NVINFER_LIB} -> HAVE_TENSORRT=1")
     target_include_directories(auto_aim PUBLIC ${NVINFER_INCLUDE_DIR} ${CUDART_INCLUDE_DIR})
-    target_link_libraries(auto_aim PUBLIC ${NVINFER_LIB} ${CUDART_LIB})
+    target_link_libraries(auto_aim ${NVINFER_LIB} ${NVINFER_PLUGIN_LIB} ${CUDART_LIB})
     target_compile_definitions(auto_aim PUBLIC HAVE_TENSORRT=1)
 else()
     message(STATUS "TensorRT NOT found -> yolov5_trt 后端为占位实现（见 AGENTS.md §4.0）")

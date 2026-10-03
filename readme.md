@@ -225,7 +225,39 @@ Every `mv_*` key has a default, so configs that do not mention them behave exact
 
 Changing the resolution invalidates the camera calibration, so keep 1280x1024 unless you redo it.
 
-## 10. Related documents
+## 10. Live armor detection with TensorRT
+
+On the Jetson, install TensorRT before enabling detection:
+
+```bash
+sudo apt install -y tensorrt libnvinfer-dev libnvinfer-plugin-dev
+cd /home/irm/iRM-Vision-2026
+/usr/src/tensorrt/bin/trtexec --onnx=/home/irm/iRM-Vision-2026/assets/yolov5_0526.onnx \
+  --saveEngine=/home/irm/iRM-Vision-2026/assets/yolov5_0526_fp16.engine \
+  --fp16 --memPoolSize=workspace:1024 --buildOnly
+cmake -S /home/irm/iRM-Vision-2026 -B /home/irm/iRM-Vision-2026/build
+make -C /home/irm/iRM-Vision-2026/build detect_freq_visual_test -j2
+/home/irm/iRM-Vision-2026/build/detect_freq_visual_test \
+  -c=/home/irm/iRM-Vision-2026/configs/mv_sua133gc.yaml -m=live -stream=8080
+```
+
+Keep the repository as the working directory because model paths in YAML are relative. If an existing
+build cache uses the old `/home/irm/sp_vision_25` symlink, use that path for `cmake -S` instead.
+Stop any capture-only session with Ctrl+C before starting detection. Do not pass `-no-yolo`.
+The startup log must show `backend=tensorrt` and `yolo=on`; `NO YOLO` means detection is unavailable,
+even if the stream still works. The overlay displays armor corners, confidence, colour and number.
+This program does not control the gimbal or firing hardware.
+
+Measured on October 3, 2026 with TensorRT 8.5.2: engine generation took 638.5 seconds. The first 60
+demo frames matched a Python OpenCV 5.0 ONNX reference: 55 detected frames on both sides, identical
+counts and labels, maximum confidence difference 0.00321 and maximum corner-coordinate difference
+2.47 pixels (existing limits: 0.01 and 3 pixels). A 120-frame camera run with snapshot saving measured
+23.63 ms average detection time and 31.24 fps end to end; capture reported 165 valid frames and zero
+drops. A snapshot request returned HTTP 200. The camera viewed a desk without a visible armor target,
+so real-target accuracy still requires presenting an armor plate to the camera. Engine files are local
+artifacts and must not be committed.
+
+## 11. Related documents
 
 - [`AGENTS.md`](AGENTS.md) section 8.7: `detect_freq_visual_test` and the MindVision keys;
   section 8.8: headless MJPEG streaming and the pinned pipeline (engineering rules, Chinese).

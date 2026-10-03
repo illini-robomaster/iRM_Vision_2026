@@ -551,6 +551,34 @@ DPS = 单位时间射击窗口占比 \times 射频 \times 单发子弹伤害
 [8] 王洪玺, 计泽贤, 张兰勇. 基于卡尔曼滤波的目标识别跟踪与射击系统设计[J]. Journal of Ordnance Equipment Engineering, 2022, 43(11). 
 
 
+## Jetson 摄像头实时装甲板检测（2026-10-03 验证）
+
+TensorRT 8.5.2 后端已实测：支持 FP16 / FP32 输入输出，修正 GPU→CPU 输出拷贝方向，
+CMake 链接 nvinfer、nvinfer_plugin 与 cudart。使用现有 YOLOv5 ONNX，不改相机 pipeline 或上层算法。
+
+```bash
+sudo apt install -y tensorrt libnvinfer-dev libnvinfer-plugin-dev
+cd /home/irm/iRM-Vision-2026
+/usr/src/tensorrt/bin/trtexec --onnx=/home/irm/iRM-Vision-2026/assets/yolov5_0526.onnx \
+  --saveEngine=/home/irm/iRM-Vision-2026/assets/yolov5_0526_fp16.engine \
+  --fp16 --memPoolSize=workspace:1024 --buildOnly
+cmake -S /home/irm/iRM-Vision-2026 -B /home/irm/iRM-Vision-2026/build
+make -C /home/irm/iRM-Vision-2026/build detect_freq_visual_test -j2
+/home/irm/iRM-Vision-2026/build/detect_freq_visual_test \
+  -c=/home/irm/iRM-Vision-2026/configs/mv_sua133gc.yaml -m=live -stream=8080
+```
+
+若已有 build 缓存记录旧路径，配置时将 `cmake -S` 改为 `/home/irm/sp_vision_25`，保留该符号链接。
+YAML 模型路径是相对路径，运行时必须先进入仓库。先用 Ctrl+C 退出旧直播，避免抢占相机或端口。
+检测启动不要加 `-no-yolo`；必须看到 `backend=tensorrt` 与 `yolo=on`。
+出现 `NO YOLO` 即只是取流，不算检测成功。直播叠加角点、置信度、颜色和编号，不控制云台或发射。
+
+实测：引擎生成 638.5 秒；demo 前 60 帧与 Python OpenCV 5.0 ONNX 参考对比，两侧各 55 帧检出，
+数量与标签一致，最大置信度差 0.00321、最大角点坐标差 2.47 px，满足既有 0.01 / 3 px 阈值。
+摄像头 120 帧（含存图）检测平均 23.63 ms，端到端 31.24 fps，采集 165 帧全部有效、丢帧 0，
+直播快照 HTTP 200。镜头当时对着桌面，没有可见装甲板，真实目标精度仍需放入装甲板验收。
+引擎只留本机，不提交 Git。
+
 ## 项目成员
 王骁扬、杨佳轩、奚睿豪、俞选涛、吴圳楠、杨瑞灵、程翔宇
 

@@ -108,11 +108,13 @@ struct YOLOV5_TRT::Impl
 
   int input_index = -1, output_index = -1;
   std::size_t input_elems = 0, output_elems = 0;
+  nvinfer1::DataType input_dtype = nvinfer1::DataType::kFLOAT;
   nvinfer1::DataType output_dtype = nvinfer1::DataType::kFLOAT;
 
   void * dev_input = nullptr;
   void * dev_output = nullptr;
   std::vector<float> host_input;
+  std::vector<__half> host_input_half;
   std::vector<float> host_output_float;
   std::vector<__half> host_output_half;
   std::vector<void *> bindings;
@@ -209,10 +211,19 @@ YOLOV5_TRT::YOLOV5_TRT(const std::string & config_path, bool debug)
 
   // 3. 绑定：约定一个输入 + 一个输出，输入固定 1x3x640x640
   auto nb = impl_->engine->getNbBindings();
+  if (nb != 2) {
+    throw std::runtime_error("[YOLOV5_TRT] 引擎必须有且仅有一个输入 / 一个输出");
+  }
   for (int i = 0; i < static_cast<int>(nb); i++) {
     auto name = std::string(impl_->engine->getBindingName(i));
     auto dims = impl_->engine->getBindingDimensions(i);
     if (impl_->engine->bindingIsInput(i)) {
+      impl_->input_dtype = impl_->engine->getBindingDataType(i);
+      if (
+        impl_->input_dtype != nvinfer1::DataType::kFLOAT &&
+        impl_->input_dtype != nvinfer1::DataType::kHALF) {
+        throw std::runtime_error("[YOLOV5_TRT] 输入 binding 必须为 fp32 / fp16");
+      }
       impl_->input_index = i;
       impl_->input_elems = dims_volume(dims);
       if (
@@ -222,11 +233,17 @@ YOLOV5_TRT::YOLOV5_TRT(const std::string & config_path, bool debug)
           "[YOLOV5_TRT] 输入 " + name + " 形状 " + dims_to_string(dims) + " 不是 [1, 3, 640, 640]");
       }
       tools::logger()->info(
-        "[YOLOV5_TRT] binding[{}] \"{}\" input {}", i, name, dims_to_string(dims));
+        "[YOLOV5_TRT] binding[{}] \"{}\" input {} {}", i, name, dims_to_string(dims),
+        dtype_name(impl_->input_dtype));
     } else {
       impl_->output_index = i;
       impl_->output_elems = dims_volume(dims);
       impl_->output_dtype = impl_->engine->getBindingDataType(i);
+      if (
+        impl_->output_dtype != nvinfer1::DataType::kFLOAT &&
+        impl_->output_dtype != nvinfer1::DataType::kHALF) {
+        throw std::runtime_error("[YOLOV5_TRT] 输出 binding 必须为 fp32 / fp16");
+      }
       tools::logger()->info(
         "[YOLOV5_TRT] binding[{}] \"{}\" output {} {}", i, name, dims_to_string(dims),
         dtype_name(impl_->output_dtype));
@@ -238,6 +255,9 @@ YOLOV5_TRT::YOLOV5_TRT(const std::string & config_path, bool debug)
 
   // 4. 分配 host / device buffer
   impl_->host_input.resize(impl_->input_elems);
+  if (impl_->input_dtype == nvinfer1::DataType::kHALF) {
+    impl_->host_input_half.resize(impl_->input_elems);
+  }
   if (impl_->output_dtype == nvinfer1::DataType::kHALF) {
     impl_->host_output_half.resize(impl_->output_elems);
   } else {
@@ -246,7 +266,8 @@ YOLOV5_TRT::YOLOV5_TRT(const std::string & config_path, bool debug)
   impl_->bindings.resize(nb, nullptr);
 
   cuda_check(
-    cudaMalloc(&impl_->dev_input, impl_->input_elems * sizeof(float)), "cudaMalloc(input)");
+    cudaMalloc(&impl_->dev_input, impl_->input_elems * dtype_size(impl_->input_dtype)),
+    "cudaMalloc(input)");
   cuda_check(
     cudaMalloc(&impl_->dev_output, impl_->output_elems * dtype_size(impl_->output_dtype)),
     "cudaMalloc(output)");
@@ -300,11 +321,19 @@ std::list<Armor> YOLOV5_TRT::detect(const cv::Mat & raw_img, int frame_count)
     throw std::runtime_error("[YOLOV5_TRT] 预处理输出元素数与引擎输入不一致");
   }
   std::memcpy(impl_->host_input.data(), blob.ptr<float>(), impl_->input_elems * sizeof(float));
+  if (impl_->input_dtype == nvinfer1::DataType::kHALF) {
+    for (std::size_t i = 0; i < impl_->input_elems; i++) {
+      impl_->host_input_half[i] = __float2half(impl_->host_input[i]);
+    }
+  }
+  const void * host_input = impl_->input_dtype == nvinfer1::DataType::kHALF
+                             ? static_cast<const void *>(impl_->host_input_half.data())
+                             : static_cast<const void *>(impl_->host_input.data());
 
   // infer：H2D -> enqueueV2 -> D2H
   cuda_check(
     cudaMemcpyAsync(
-      impl_->dev_input, impl_->host_input.data(), impl_->input_elems * sizeof(float),
+      impl_->dev_input, host_input, impl_->input_elems * dtype_size(impl_->input_dtype),
       cudaMemcpyHostToDevice, impl_->stream),
     "cudaMemcpyAsync(H2D)");
 
@@ -317,7 +346,7 @@ std::list<Armor> YOLOV5_TRT::detect(const cv::Mat & raw_img, int frame_count)
                          : static_cast<void *>(impl_->host_output_float.data());
   cuda_check(
     cudaMemcpyAsync(
-      impl_->dev_output, host_output, impl_->output_elems * dtype_size(impl_->output_dtype),
+      host_output, impl_->dev_output, impl_->output_elems * dtype_size(impl_->output_dtype),
       cudaMemcpyDeviceToHost, impl_->stream),
     "cudaMemcpyAsync(D2H)");
   cuda_check(cudaStreamSynchronize(impl_->stream), "cudaStreamSynchronize");

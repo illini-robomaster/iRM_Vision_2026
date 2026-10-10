@@ -7,6 +7,23 @@ programs are unchanged.
 
 ## Build and start
 
+Recommended launcher (works from any working directory):
+
+```bash
+bash /home/irm/iRM-Vision-2026/scripts/start_intrinsic_calibration.sh
+# First-time build, or rebuild after pulling changes:
+bash /home/irm/iRM-Vision-2026/scripts/start_intrinsic_calibration.sh --build
+# Direct access on a trusted LAN:
+bash /home/irm/iRM-Vision-2026/scripts/start_intrinsic_calibration.sh --lan
+```
+
+Use `--help` for config, bind, port, output and offline image options. Use
+`--dry-run` to check the launch command without opening a camera. The launcher
+does not build unless `--build` is given. It uses `exec` so Ctrl+C reaches the
+application directly. It is also executable without the `bash` prefix.
+
+Equivalent manual commands:
+
 ```bash
 cmake -S /home/irm/iRM-Vision-2026 -B /home/irm/iRM-Vision-2026/build
 make -C /home/irm/iRM-Vision-2026/build intrinsic_calibration_gui intrinsic_calibration_test -j2

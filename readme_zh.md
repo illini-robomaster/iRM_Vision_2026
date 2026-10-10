@@ -586,6 +586,16 @@ MindVision 摄像头 → TensorRT 推理 → MJPEG 检测结果叠加链路已�
 
 ## 无云台相机内参标定（浏览器界面）
 
+一键启动脚本（可从任意目录运行，不需要 sudo）：
+
+```bash
+bash /home/irm/iRM-Vision-2026/scripts/start_intrinsic_calibration.sh
+```
+
+首次编译或更新代码后加 `--build`；可信局域网直接访问加 `--lan`。
+参数说明加 `--help`，只检查命令、不打开相机加 `--dry-run`。默认监听本机 8081 端口，
+脚本会打印浏览器地址和笔记本 SSH 转发命令。退出按 Ctrl+C。
+
 新增 `intrinsic_calibration_gui`：直接使用相机，不连接 CBoard 或 IMU。
 支持圆点板检测、手动采样、缩略图删除、后台内参求解、逐帧误差、去畸变预览和 YAML 下载。
 手眼姿态提供器与样本时间戳接口已预留，但手眼功能未启用；缺失姿态保存为 null。

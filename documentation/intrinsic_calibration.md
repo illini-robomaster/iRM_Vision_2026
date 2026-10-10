@@ -80,7 +80,11 @@ on network and encoding time; 30 fps is a target, not a guarantee. Live capture
 caches an 800-pixel-wide JPEG (quality 70) outside the state lock; preview requests
 reuse that cache. A separate detection worker checks the latest original frame
 with a 100 ms pause between checks, without holding the state mutex during detection.
-The live preview does not overlay asynchronous circle positions on a newer image.
+When a complete grid is found, the live preview shows its matching detected frame
+with green circle centers, yellow zero-based indices and colored grid connections.
+This annotated view updates at the detector rate, not camera rate. Missing/stale
+detections fall back to the latest raw preview. Coordinates are never overlaid on
+a newer mismatched frame. Undistortion preview remains unannotated.
 Capture saves the original **detected frame** and its matching points/timestamp;
 live detected frames older than one second are rejected. Keep the board stationary
 before capture. Offline input retains synchronous detection and overlays.

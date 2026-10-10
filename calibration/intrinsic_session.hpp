@@ -52,6 +52,8 @@ struct Result
 };
 
 bool detect(const cv::Mat & image, const Pattern & pattern, std::vector<cv::Point2f> & points);
+cv::Mat draw_detection(
+  const cv::Mat & image, const Pattern & pattern, const std::vector<cv::Point2f> & points);
 Result calibrate(const std::vector<Sample> & samples, const Pattern & pattern);
 // Export metadata and raw images only. Hand-eye solving remains explicitly unavailable.
 void save_manifest(const std::string & directory, const std::vector<Sample> & samples,

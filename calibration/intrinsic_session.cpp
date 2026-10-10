@@ -34,6 +34,23 @@ bool detect(const cv::Mat & image, const Pattern & pattern, std::vector<cv::Poin
                              cv::CALIB_CB_SYMMETRIC_GRID);
 }
 
+cv::Mat draw_detection(
+  const cv::Mat & image, const Pattern & pattern, const std::vector<cv::Point2f> & points)
+{
+  auto drawing = image.clone();
+  if (drawing.empty() || points.size() != static_cast<size_t>(pattern.cols * pattern.rows))
+    return drawing;
+  cv::drawChessboardCorners(drawing, {pattern.cols, pattern.rows}, points, true);
+  for (size_t i = 0; i < points.size(); ++i) {
+    cv::circle(drawing, points[i], 5, {0, 255, 0}, 2, cv::LINE_AA);
+    cv::putText(drawing, std::to_string(i), points[i] + cv::Point2f(7, -7),
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, {0, 0, 0}, 3, cv::LINE_AA);
+    cv::putText(drawing, std::to_string(i), points[i] + cv::Point2f(7, -7),
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, {0, 255, 255}, 1, cv::LINE_AA);
+  }
+  return drawing;
+}
+
 Result calibrate(const std::vector<Sample> & samples, const Pattern & pattern)
 {
   pattern.validate();

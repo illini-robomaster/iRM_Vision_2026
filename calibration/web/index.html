@@ -33,7 +33,7 @@
       <section><h2>实时预览</h2><img id="preview" alt="相机图像与圆点板检测结果">
         <div class="bar"><span id="cameraStatus">等待图像</span><label><input id="undistort" type="checkbox" disabled> 去畸变预览</label></div>
         <div class="bar"><button id="capture" disabled>采集当前帧</button><button id="next" class="secondary" hidden>下一张离线图片</button></div>
-        <p class="muted">请使用黑圆点、白底的对称圆点板。采集不同位置、距离和倾斜角度；移动后停稳再采样。实时预览与检测独立运行、不叠加异步圆点；采样保存检测对应的原始帧。预览缩放不影响标定。</p>
+        <p class="muted">检测成功后显示绿色圆心、黄色点序和彩色连接线（点序从 0 开始）。标记画在检测对应的图像上，刷新率由检测速度决定；未检测到完整圆点板时显示普通实时画面。移动后停稳再采样；原始采样不包含标记。去畸变预览不显示检测标记。</p>
       </section>
       <section><h2>采样列表 <span id="sampleCount">0</span> / 100</h2><div id="samples"></div><p class="muted">点击缩略图查看；删除模糊或高误差样本后重新计算。采样变化会使旧结果失效。</p></section>
       <section><h2>标定结果</h2><div class="metrics"><div class="metric">RMS 重投影误差<strong id="rms">—</strong></div><div class="metric">平均点距离误差<strong id="mean">—</strong></div></div>

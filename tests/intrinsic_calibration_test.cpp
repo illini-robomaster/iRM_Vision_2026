@@ -75,6 +75,10 @@ int main(int argc, char ** argv)
         cv::circle(board, {75 + col * 50, 60 + row * 50}, 12, {0, 0, 0}, -1, cv::LINE_AA);
     std::vector<cv::Point2f> centers;
     require(detect(board, pattern, centers) && centers.size() == 70, "Rendered grid detection");
+    const auto original = board.clone();
+    const auto annotated = draw_detection(board, pattern, centers);
+    require(cv::norm(board, original, cv::NORM_INF) == 0, "Overlay must not change raw sample");
+    require(cv::norm(board, annotated, cv::NORM_INF) > 0, "Overlay must draw detected circles");
     cv::Mat blank(board.size(), board.type(), cv::Scalar(255, 255, 255));
     require(!detect(blank, pattern, centers), "Blank frame rejected");
     if (argc == 2) {

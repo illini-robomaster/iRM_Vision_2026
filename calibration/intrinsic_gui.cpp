@@ -70,6 +70,7 @@ struct State
   cv::Mat detected_frame;
   Timestamp detected_timestamp;
   std::string preview_jpeg;
+  std::string detected_jpeg;
   unsigned long long frame_sequence = 0;
   unsigned long long pattern_revision = 0;
   double capture_fps = 0;
@@ -259,7 +260,9 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
   } else if (method == "GET" && (path == "/preview.jpg" || path == "/sample.jpg")) {
     if (path == "/preview.jpg" && first.find("undistort=1") == std::string::npos &&
         !state.preview_jpeg.empty()) {
-      const auto jpeg = state.preview_jpeg;
+      const bool fresh_detection = state.found && !state.detected_jpeg.empty() &&
+        std::chrono::steady_clock::now() - state.detected_timestamp < std::chrono::seconds(1);
+      const auto jpeg = fresh_detection ? state.detected_jpeg : state.preview_jpeg;
       lock.unlock();
       reply(fd, 200, "image/jpeg", jpeg);
       return;
@@ -279,8 +282,7 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
         if (first.find("undistort=1") != std::string::npos && state.result) {
           correction = state.result;
         } else if (state.preview_jpeg.empty()) {
-          cv::drawChessboardCorners(image, {state.pattern.cols, state.pattern.rows}, state.points,
-                                    state.found);
+          if (state.found) image = draw_detection(image, state.pattern, state.points);
         }
       }
     }
@@ -345,6 +347,7 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
       state.pattern = pattern;
       ++state.pattern_revision;
       state.found = false;
+      state.detected_jpeg.clear();
       state.points.clear();
       if (!inputs.empty()) state.update(state.frame, state.timestamp);
       save_manifest(state.directory, state.samples, state.pattern);
@@ -455,12 +458,22 @@ int main(int argc, char ** argv)
               const bool found = detect(image, pattern, points);
               const double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - start).count();
+              std::string annotated;
+              if (found) {
+                auto drawing = draw_detection(image, pattern, points);
+                const auto scale = std::min(1.0, 800.0 / drawing.cols);
+                cv::resize(drawing, drawing, {}, scale, scale);
+                std::vector<uchar> jpeg;
+                cv::imencode(".jpg", drawing, jpeg, {cv::IMWRITE_JPEG_QUALITY, 80});
+                annotated.assign(jpeg.begin(), jpeg.end());
+              }
               std::lock_guard<std::mutex> lock(state.mutex);
               if (revision == state.pattern_revision) {
                 state.detected_frame = image;
                 state.detected_timestamp = timestamp;
                 state.points = std::move(points);
                 state.found = found;
+                state.detected_jpeg = std::move(annotated);
                 state.detect_ms = ms;
               }
             } catch (const std::exception & e) {

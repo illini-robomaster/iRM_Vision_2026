@@ -5,6 +5,9 @@ let pending = false;
 let initialized = false;
 let sampleSignature = '';
 let previewObjectUrl = null;
+let previewFrames = 0;
+let previewWindow = performance.now();
+let previewFps = 0;
 
 function message(text, error = false) {
   $('message').textContent = text;
@@ -31,7 +34,7 @@ async function action(path, data = {}) {
 function render() {
   if (!state) return;
   const locked = pending || state.busy;
-  $('cameraStatus').textContent = `${state.connected ? '已连接' : '未连接'} · ${state.width}×${state.height} · ${state.found ? '完整圆点板已检测' : '未检测到完整圆点板'}`;
+  $('cameraStatus').textContent = `${state.connected ? '已连接' : '未连接'} · ${state.width}×${state.height} · ${state.found ? '完整圆点板已检测' : '未检测到完整圆点板'} · 取流 ${(state.capture_fps || 0).toFixed(1)} fps · 预览 ${previewFps.toFixed(1)} fps · 检测 ${(state.detect_ms || 0).toFixed(0)} ms`;
   $('capture').disabled = locked || !state.connected || !state.found || state.samples.length >= 100;
   $('calibrate').disabled = locked || state.samples.length < 5;
   $('pattern').disabled = locked;
@@ -102,15 +105,25 @@ async function pollPreview() {
       const response = await fetch(`/preview.jpg?undistort=${$('undistort').checked ? 1 : 0}`, {cache: 'no-store'});
       if (response.ok) {
         const url = URL.createObjectURL(await response.blob());
+        const decoded = new Image();
+        decoded.src = url;
+        try { await decoded.decode(); }
+        catch (error) { URL.revokeObjectURL(url); throw error; }
         $('preview').src = url;
         if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
         previewObjectUrl = url;
+        ++previewFrames;
+        const elapsed = performance.now() - previewWindow;
+        if (elapsed >= 1000) {
+          previewFps = previewFrames * 1000 / elapsed;
+          previewFrames = 0; previewWindow = performance.now();
+        }
       }
       else message(`预览请求失败：HTTP ${response.status}`, true);
     } catch (error) { message(`预览连接失败：${error.message}`, true); }
   }
   // One preview request at a time: slow links drop refreshes, never queue stale frames.
-  setTimeout(pollPreview, Math.max(0, 67 - (performance.now() - started)));
+  setTimeout(pollPreview, Math.max(0, 33 - (performance.now() - started)));
 }
 $('capture').onclick = () => action('/api/capture');
 $('next').onclick = () => action('/api/next');

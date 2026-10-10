@@ -73,10 +73,20 @@ pipeline settings from the actual camera configuration.
    overwritten automatically. The existing Solver expects nine row-major matrix
    elements and five coefficients `[k1,k2,p1,p2,k3]`.
 
-The browser uses JPEG snapshots targeting about 15 fps, independently of the
+The browser uses JPEG snapshots targeting about 30 fps, independently of the
 500 ms status poll, not a full-rate MJPEG stream. Only one preview request is
 in flight, so slow links do not queue stale frames. Actual refresh rate depends
-on network, detection and encoding time; 15 fps is a target, not a guarantee.
+on network and encoding time; 30 fps is a target, not a guarantee. Live capture
+caches an 800-pixel-wide JPEG (quality 70) outside the state lock; preview requests
+reuse that cache. A separate detection worker checks the latest original frame
+with a 100 ms pause between checks, without holding the state mutex during detection.
+The live preview does not overlay asynchronous circle positions on a newer image.
+Capture saves the original **detected frame** and its matching points/timestamp;
+live detected frames older than one second are rejected. Keep the board stationary
+before capture. Offline input retains synchronous detection and overlays.
+The page shows capture rate, completed preview refresh rate, and detection time.
+Preview fps measures completed browser refreshes, not unique camera frames.
+Undistortion preview remains computed on request and may be slower.
 JPEG encoding and network transmission do not hold the camera state mutex.
 Preview images may be resized; detection, calibration, and saved PNG
 images use original image resolution. Sample thumbnails can be enlarged by

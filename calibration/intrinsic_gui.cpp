@@ -67,6 +67,13 @@ struct State
   std::mutex mutex;
   Pattern pattern;
   cv::Mat frame;
+  cv::Mat detected_frame;
+  Timestamp detected_timestamp;
+  std::string preview_jpeg;
+  unsigned long long frame_sequence = 0;
+  unsigned long long pattern_revision = 0;
+  double capture_fps = 0;
+  double detect_ms = 0;
   std::vector<cv::Point2f> points;
   Timestamp timestamp;
   bool found = false;
@@ -90,6 +97,8 @@ struct State
     timestamp = time;
     connected = true;
     found = detect(frame, pattern, points);
+    detected_frame = frame;
+    detected_timestamp = timestamp;
   }
 
   void finish_job()
@@ -138,6 +147,9 @@ struct State
       {"error", error},
       {"width", frame.cols},
       {"height", frame.rows},
+      {"capture_fps", capture_fps},
+      {"detect_ms", detect_ms},
+      {"frame_sequence", frame_sequence},
       {"pattern",
        {{"cols", pattern.cols}, {"rows", pattern.rows}, {"spacing_mm", pattern.spacing_mm}}},
       {"samples", views},
@@ -245,7 +257,15 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
     lock.unlock();
     reply(fd, 200, "application/json", status.dump());
   } else if (method == "GET" && (path == "/preview.jpg" || path == "/sample.jpg")) {
+    if (path == "/preview.jpg" && first.find("undistort=1") == std::string::npos &&
+        !state.preview_jpeg.empty()) {
+      const auto jpeg = state.preview_jpeg;
+      lock.unlock();
+      reply(fd, 200, "image/jpeg", jpeg);
+      return;
+    }
     cv::Mat image;
+    std::optional<Result> correction;
     if (path == "/sample.jpg") {
       // ID is read from the original query, never interpreted as a filesystem path.
       auto query = first.find("?id=");
@@ -257,11 +277,8 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
       image = state.frame.clone();
       if (!image.empty()) {
         if (first.find("undistort=1") != std::string::npos && state.result) {
-          cv::Mat corrected;
-          cv::undistort(image, corrected, state.result->camera_matrix,
-                        state.result->distort_coeffs);
-          image = corrected;
-        } else {
+          correction = state.result;
+        } else if (state.preview_jpeg.empty()) {
           cv::drawChessboardCorners(image, {state.pattern.cols, state.pattern.rows}, state.points,
                                     state.found);
         }
@@ -269,6 +286,11 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
     }
     if (image.empty()) throw std::runtime_error("No image available");
     lock.unlock();
+    if (correction) {
+      cv::Mat corrected;
+      cv::undistort(image, corrected, correction->camera_matrix, correction->distort_coeffs);
+      image = corrected;
+    }
     const double scale = std::min(1.0, 960.0 / image.cols);
     cv::resize(image, image, {}, scale, scale);
     std::vector<uchar> jpeg;
@@ -286,13 +308,13 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
         throw std::runtime_error("Complete circle grid not detected");
       if (state.samples.size() >= 100) throw std::runtime_error("Maximum 100 samples");
       if (inputs.empty() &&
-          std::chrono::steady_clock::now() - state.timestamp > std::chrono::seconds(3))
-        throw std::runtime_error("Frame is stale");
+          std::chrono::steady_clock::now() - state.detected_timestamp > std::chrono::seconds(1))
+        throw std::runtime_error("Detected frame is stale; wait for a fresh complete grid");
       Sample sample;
       sample.id = state.next_id++;
-      sample.image = state.frame.clone();
+      sample.image = state.detected_frame.clone();
       sample.points = state.points;
-      sample.timestamp = state.timestamp;
+      sample.timestamp = state.detected_timestamp;
       if (state.poses) sample.orientation_wxyz = state.poses->orientation_at(sample.timestamp);
       if (!cv::imwrite(state.directory + "/" + std::to_string(sample.id) + ".png", sample.image))
         throw std::runtime_error("Cannot save raw sample");
@@ -321,7 +343,10 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
       state.invalidate();
       state.samples.clear();
       state.pattern = pattern;
-      state.found = detect(state.frame, state.pattern, state.points);
+      ++state.pattern_revision;
+      state.found = false;
+      state.points.clear();
+      if (!inputs.empty()) state.update(state.frame, state.timestamp);
       save_manifest(state.directory, state.samples, state.pattern);
     } else if (path == "/api/calibrate") {
       if (state.samples.size() < 5)
@@ -356,6 +381,7 @@ int main(int argc, char ** argv)
   int listener = -1;
   std::atomic<bool> stop{false};
   std::thread capture;
+  std::thread detector;
   // State outlives capture thread even when main setup throws.
   State state;
   try {
@@ -405,19 +431,77 @@ int main(int argc, char ** argv)
     save_manifest(state.directory, state.samples, state.pattern);
     tools::Exiter exiter;
     if (inputs.empty()) {
+      detector = std::thread([&state, &stop] {
+        unsigned long long last_sequence = 0;
+        while (!stop) {
+          cv::Mat image;
+          Timestamp timestamp;
+          Pattern pattern;
+          unsigned long long revision = 0, sequence = 0;
+          {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            sequence = state.frame_sequence;
+            if (sequence != last_sequence && !state.frame.empty()) {
+              image = state.frame;  // Immutable owned frame; capture replaces, never mutates.
+              timestamp = state.timestamp;
+              pattern = state.pattern;
+              revision = state.pattern_revision;
+            }
+          }
+          if (!image.empty()) {
+            try {
+              std::vector<cv::Point2f> points;
+              const auto start = std::chrono::steady_clock::now();
+              const bool found = detect(image, pattern, points);
+              const double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+              std::lock_guard<std::mutex> lock(state.mutex);
+              if (revision == state.pattern_revision) {
+                state.detected_frame = image;
+                state.detected_timestamp = timestamp;
+                state.points = std::move(points);
+                state.found = found;
+                state.detect_ms = ms;
+              }
+            } catch (const std::exception & e) {
+              std::lock_guard<std::mutex> lock(state.mutex);
+              state.found = false;
+              state.error = e.what();
+            }
+            last_sequence = sequence;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      });
       const auto path = cli.get<std::string>("config");
       capture = std::thread([&state, &stop, path] {
         try {
           io::Camera camera(path);
+          Timestamp previous;
           while (!stop) {
             cv::Mat image;
             Timestamp timestamp;
             camera.read(image, timestamp);
+            if (image.empty()) throw std::runtime_error("Empty input frame");
+            cv::Mat owned = image.clone();
+            cv::Mat preview;
+            cv::resize(owned, preview, {}, std::min(1.0, 800.0 / owned.cols),
+                       std::min(1.0, 800.0 / owned.cols));
+            std::vector<uchar> jpeg;
+            cv::imencode(".jpg", preview, jpeg, {cv::IMWRITE_JPEG_QUALITY, 70});
             {
               std::lock_guard<std::mutex> lock(state.mutex);
-              state.update(image, timestamp);
+              if (!state.samples.empty() && owned.size() != state.samples.front().image.size())
+                throw std::runtime_error("Resolution changed; restart calibration");
+              state.frame = std::move(owned);
+              state.timestamp = timestamp;
+              state.connected = true;
+              state.preview_jpeg.assign(jpeg.begin(), jpeg.end());
+              ++state.frame_sequence;
+              if (previous != Timestamp{} && timestamp > previous)
+                state.capture_fps = 1.0 / std::chrono::duration<double>(timestamp - previous).count();
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            previous = timestamp;
           }
         } catch (const std::exception & e) {
           std::lock_guard<std::mutex> lock(state.mutex);
@@ -445,6 +529,7 @@ int main(int argc, char ** argv)
     }
     stop = true;
     if (capture.joinable()) capture.join();
+    if (detector.joinable()) detector.join();
     if (state.busy) {
       state.job.wait();
       state.finish_job();
@@ -455,6 +540,7 @@ int main(int argc, char ** argv)
   } catch (const std::exception & e) {
     stop = true;
     if (capture.joinable()) capture.join();
+    if (detector.joinable()) detector.join();
     if (listener >= 0) close(listener);
     tools::logger()->error("[IntrinsicGUI] {}", e.what());
     return 1;

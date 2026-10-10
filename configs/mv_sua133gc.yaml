@@ -4,8 +4,8 @@
 # 只服务于「取流 / 检测」这类程序：
 #   ./build/camera_test -c=configs/mv_sua133gc.yaml -d      # 只验取流（帧率直接打在日志里）
 #   ./build/detect_freq_visual_test -c=configs/mv_sua133gc.yaml -m=live -d
-# 端到端主链路（minimum_vision_system / uav）需要标定、planner、cboard 等键，
-# 本文件没有，请用完整配置（configs/demo.yaml 等）再把相机段换成下面这段。
+# 已包含本机相机内参；端到端主链路（minimum_vision_system / uav）仍缺手眼外参、
+# planner、cboard 等键，请用完整配置并复制本文件的相机设置和内参，不要沿用其他相机的外参。
 #
 # 关于 USB2.0（480Mbps）：本机实测（Jetson Orin Nano，相机 f622:0001 SN 043070620316，
 # 走 480M 口/hub）——默认预设 1280x1024、Bayer8 原始数据、frame_speed=1：
@@ -94,6 +94,13 @@ mv_light_frequency: 0       # 光源频率：0 = 50Hz（与电网一致；60Hz �
 # mv_parameter_save_group: 0           # 把本次生效参数保存到参数组
 # mv_data_dir: "Camera"                # SDK 数据目录（.config/.mvdat 位置），空 = SDK 默认
 # ----------------------------------------------------------------------------
+
+#####-----相机内参（1280x1024，保持标定时的镜头、对焦及 ROI）-----#####
+# 来源：records/calibration/2026-10-10_16-23-58_0/intrinsics.yaml
+# 重投影 RMS = 0.2241235409462671 px，平均点误差 = 0.1891927870543745 px。
+# 仅内参；没有完成手眼标定，不提供占位 R_camera2gimbal / t_camera2gimbal。
+camera_matrix: [1646.694479464929, 0, 629.3347317116185, 0, 1649.159708561839, 518.9448176031, 0, 0, 1]
+distort_coeffs: [-0.07563482581065475, 0.274743634586268, 0.001505720850613093, 0.0007716521495002592, 0]
 
 #####-----神经网络参数（检测用）-----#####
 yolo_name: yolov5

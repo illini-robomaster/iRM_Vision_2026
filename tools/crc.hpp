@@ -8,6 +8,9 @@ namespace tools
 // len不包括crc8
 uint8_t get_crc8(const uint8_t * data, uint16_t len);
 
+// len不包括crc8；init为crc8初值（minipc协议使用0x00，见tools/crc.cpp的CRC8_INIT）
+uint8_t get_crc8(const uint8_t * data, uint16_t len, uint8_t init);
+
 // len包括crc8
 bool check_crc8(const uint8_t * data, uint16_t len);
 

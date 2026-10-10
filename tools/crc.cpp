@@ -47,9 +47,11 @@ const uint16_t CRC16_TABLE[256] = {
 
 namespace tools
 {
-uint8_t get_crc8(const uint8_t * data, uint16_t len)
+uint8_t get_crc8(const uint8_t * data, uint16_t len) { return get_crc8(data, len, CRC8_INIT); }
+
+uint8_t get_crc8(const uint8_t * data, uint16_t len, uint8_t init)
 {
-  uint8_t crc8 = CRC8_INIT;
+  uint8_t crc8 = init;
   uint8_t byte;
   uint8_t i;
 

@@ -584,6 +584,34 @@ MindVision 摄像头 → TensorRT 推理 → MJPEG 检测结果叠加链路已�
 上述性能数字仍来自初始基准测试，不作为本次实物测试的新增测量结果。
 引擎只留本机，不提交 Git。
 
+## 无云台相机内参标定（浏览器界面）
+
+新增 `intrinsic_calibration_gui`：直接使用相机，不连接 CBoard 或 IMU。
+支持圆点板检测、手动采样、缩略图删除、后台内参求解、逐帧误差、去畸变预览和 YAML 下载。
+手眼姿态提供器与样本时间戳接口已预留，但手眼功能未启用；缺失姿态保存为 null。
+
+```bash
+make -C /home/irm/iRM-Vision-2026/build intrinsic_calibration_gui intrinsic_calibration_test -j2
+/home/irm/iRM-Vision-2026/build/intrinsic_calibration_gui \
+  -c=/home/irm/iRM-Vision-2026/configs/mv_sua133gc.yaml \
+  -b=127.0.0.1 -p=8081 -o=/home/irm/iRM-Vision-2026/records/calibration
+```
+
+首次新增目标需先 `cmake -S /home/irm/iRM-Vision-2026 -B /home/irm/iRM-Vision-2026/build`。
+本机浏览器打开 `http://127.0.0.1:8081/`。远程推荐在笔记本执行
+`ssh -L 8081:127.0.0.1:8081 irm@JETSON_IP`，再打开笔记本的同一地址。
+也可 `-b=0.0.0.0` 在可信局域网访问 `http://JETSON_IP:8081/`；无认证，不得暴露公网。
+
+默认对称圆点板 10 列 × 7 行，圆心间距 40 mm，可在页面修改。至少 5 张才能计算，建议
+15–25 张不同位置、距离与倾角的清晰图像；覆盖提示不是质量合格判据。原始分辨率采样，
+只缩放预览。结果保存到独立会话目录，不自动覆盖机器人配置；删除样本会使旧结果失效。
+换分辨率、ROI、焦距后重新标定。Ctrl+C 正常关闭释放相机，不要强杀。
+
+离线输入可加 `-i=/绝对路径/图片目录`，不打开相机，按文件名排序（建议编号补零），在页面
+点“下一张离线图片”切换。自动化验证：
+`python3 /home/irm/iRM-Vision-2026/scripts/test_intrinsic_gui.py`。
+完整说明：`/home/irm/iRM-Vision-2026/documentation/intrinsic_calibration.md`。
+
 ## 项目成员
 王骁扬、杨佳轩、奚睿豪、俞选涛、吴圳楠、杨瑞灵、程翔宇
 

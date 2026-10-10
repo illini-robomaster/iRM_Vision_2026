@@ -265,6 +265,8 @@ artifacts and must not be committed.
 
 ## 11. Related documents
 
+- `documentation/intrinsic_calibration.md`: camera-only browser calibration, sample management,
+  error reports, YAML export, and the future hand-eye extension contract. No CBoard is required.
 - [`AGENTS.md`](AGENTS.md) section 8.7: `detect_freq_visual_test` and the MindVision keys;
   section 8.8: headless MJPEG streaming and the pinned pipeline (engineering rules, Chinese).
 - [`readme_zh.md`](readme_zh.md): the current full Chinese README of this project (a superset of

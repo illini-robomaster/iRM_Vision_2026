@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>iRM · 相机内参标定</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101827;color:#e6edf8}
+    *{box-sizing:border-box}body{margin:0;padding:24px;max-width:1500px;margin:auto}
+    header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px}h2{font-size:18px;margin-top:0}
+    .badge{border:1px solid #3b526f;border-radius:20px;padding:7px 12px;font-size:13px;color:#a9c9ed}
+    .layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:20px}
+    section{background:#192539;border:1px solid #2c3e57;border-radius:14px;padding:20px;margin-bottom:20px}
+    #preview{display:block;width:100%;min-height:180px;object-fit:contain;background:#080e18;border-radius:10px}
+    .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:14px 0}.muted{color:#a8b6cb;font-size:14px;line-height:1.7}
+    button,.download{background:#2563eb;color:white;border:0;border-radius:8px;padding:10px 14px;cursor:pointer;font:inherit;text-decoration:none}
+    button.secondary{background:#35455f}button.danger{background:#843b49}button:disabled{opacity:.4;cursor:not-allowed}
+    label{display:block;margin:12px 0}input[type=number]{width:100%;padding:10px;background:#0f1929;border:1px solid #456080;color:white;border-radius:6px;margin-top:6px}
+    #coverage{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:12px 0}.cell{height:30px;background:#2e3b51;border-radius:4px}.cell.on{background:#16a98d}
+    #samples{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.sample{background:#101b2c;padding:10px;border-radius:8px}.sample img{width:100%;border-radius:5px}.sample button{font-size:12px;margin-top:8px}
+    pre{overflow:auto;white-space:pre-wrap;background:#101b2c;padding:14px;border-radius:8px;font-size:13px;line-height:1.6}
+    #message{min-height:26px;color:#7ee7ca}#message.error{color:#ffa3a3}.metrics{display:flex;flex-wrap:wrap;gap:15px}.metric{background:#101b2c;padding:14px;border-radius:8px;flex:1}.metric strong{display:block;margin-top:8px;font-size:22px}
+    table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:8px;text-align:left;border-bottom:1px solid #34445b}
+    dialog{background:#192539;color:white;border:1px solid #456080;border-radius:12px;width:min(95vw,1100px)}dialog img{width:100%}dialog::backdrop{background:#000a}
+    @media(max-width:800px){body{padding:12px}.layout{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <header><div><h1>相机内参标定</h1><p class="muted">Camera-only · 无需云台 / IMU / CBoard</p></div><span class="badge">iRM Vision · Calibration</span></header>
+  <p id="message" role="status" aria-live="polite">正在连接标定服务…</p>
+  <div class="layout">
+    <main>
+      <section><h2>实时预览</h2><img id="preview" alt="相机图像与圆点板检测结果">
+        <div class="bar"><span id="cameraStatus">等待图像</span><label><input id="undistort" type="checkbox" disabled> 去畸变预览</label></div>
+        <div class="bar"><button id="capture" disabled>采集当前帧</button><button id="next" class="secondary" hidden>下一张离线图片</button></div>
+        <p class="muted">请使用黑圆点、白底的对称圆点板。采集不同位置、距离和倾斜角度；移动后停稳再采样。预览缩放不影响原始分辨率标定。</p>
+      </section>
+      <section><h2>采样列表 <span id="sampleCount">0</span> / 100</h2><div id="samples"></div><p class="muted">点击缩略图查看；删除模糊或高误差样本后重新计算。采样变化会使旧结果失效。</p></section>
+      <section><h2>标定结果</h2><div class="metrics"><div class="metric">RMS 重投影误差<strong id="rms">—</strong></div><div class="metric">平均点距离误差<strong id="mean">—</strong></div></div>
+        <pre id="result">尚未标定。至少 5 张有效图片，建议采集 15–25 张姿态多样的图片。</pre>
+        <div class="bar"><button id="download" disabled>下载 intrinsics.yaml</button></div>
+        <table><thead><tr><th>样本</th><th>平均误差 (px)</th><th>RMS (px)</th></tr></thead><tbody id="errors"></tbody></table>
+      </section>
+    </main>
+    <aside>
+      <section><h2>标定板设置</h2><label>圆点列数<input id="cols" type="number" min="3" max="20" value="10"></label><label>圆点行数<input id="rows" type="number" min="3" max="20" value="7"></label><label>圆心间距 (mm)<input id="spacing" type="number" min="0.01" max="1000" step="0.01" value="40"></label><button id="pattern">应用设置</button><p class="muted">间距指圆心之间的距离，不是圆点直径。修改规格需要确认清空样本。</p></section>
+      <section><h2>采集覆盖</h2><div id="coverage"></div><p id="coverageText" class="muted"></p><p class="muted">绿色表示标定板中心曾覆盖该区域，仅用于提示。还需变化倾角与大小；覆盖率不是质量合格判据。</p><button id="calibrate" disabled>开始标定</button><p id="progress" class="muted"></p></section>
+      <section><h2>手眼标定扩展</h2><span class="badge">尚未启用</span><p class="muted">已保留样本时间戳及可选 wxyz 姿态字段。当前姿态为空，不写入假四元数，也不会连接 CBoard。</p></section>
+      <section><h2>结果保存</h2><p class="muted">原图 PNG、样本清单和当前有效结果自动保存在：</p><pre id="directory">—</pre><p class="muted">不自动覆盖机器人配置。换分辨率、ROI、焦距后需重新标定。服务仅用于可信局域网。</p></section>
+    </aside>
+  </div>
+  <dialog id="viewer"><button id="closeViewer" class="secondary">关闭</button><img id="sampleView" alt="采样图像"></dialog>
+  <script src="/app.js"></script>
+</body>
+</html>

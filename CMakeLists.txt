@@ -111,6 +111,17 @@ target_link_libraries(calibrate_handeye ${OpenCV_LIBS} fmt::fmt yaml-cpp tools)
 target_link_libraries(calibrate_robotworld_handeye ${OpenCV_LIBS} fmt::fmt yaml-cpp tools)
 target_link_libraries(split_video ${OpenCV_LIBS} fmt::fmt tools)
 
+# Camera-only calibration UI; intentionally no auto_aim/CBoard construction.
+add_library(intrinsic_session STATIC calibration/intrinsic_session.cpp)
+target_link_libraries(intrinsic_session PUBLIC ${OpenCV_LIBS} yaml-cpp)
+add_executable(intrinsic_calibration_gui calibration/intrinsic_gui.cpp)
+target_compile_definitions(intrinsic_calibration_gui PRIVATE
+    CALIBRATION_WEB_DIR="${PROJECT_SOURCE_DIR}/calibration/web")
+target_link_libraries(intrinsic_calibration_gui intrinsic_session io tools fmt::fmt
+    nlohmann_json::nlohmann_json)
+add_executable(intrinsic_calibration_test tests/intrinsic_calibration_test.cpp)
+target_link_libraries(intrinsic_calibration_test intrinsic_session)
+
 ##################tests##################
 add_executable(auto_aim_test tests/auto_aim_test.cpp)
 add_executable(auto_buff_test tests/auto_buff_test.cpp)

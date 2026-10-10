@@ -91,8 +91,12 @@ async function refresh() {
     for (const id of ['capture', 'calibrate', 'pattern', 'next', 'download']) $(id).disabled = true;
   }
 }
-async function poll() {
+async function pollStatus() {
   await refresh();
+  setTimeout(pollStatus, 500);
+}
+async function pollPreview() {
+  const started = performance.now();
   if (state && state.connected) {
     try {
       const response = await fetch(`/preview.jpg?undistort=${$('undistort').checked ? 1 : 0}`, {cache: 'no-store'});
@@ -102,9 +106,11 @@ async function poll() {
         if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
         previewObjectUrl = url;
       }
-    } catch (_) { /* Connection error is reported by the status poll. */ }
+      else message(`预览请求失败：HTTP ${response.status}`, true);
+    } catch (error) { message(`预览连接失败：${error.message}`, true); }
   }
-  setTimeout(poll, 400);
+  // One preview request at a time: slow links drop refreshes, never queue stale frames.
+  setTimeout(pollPreview, Math.max(0, 67 - (performance.now() - started)));
 }
 $('capture').onclick = () => action('/api/capture');
 $('next').onclick = () => action('/api/next');
@@ -125,4 +131,5 @@ $('download').onclick = async () => {
   } catch (error) { message(error.message, true); }
 };
 $('closeViewer').onclick = () => $('viewer').close();
-poll();
+pollStatus();
+pollPreview();

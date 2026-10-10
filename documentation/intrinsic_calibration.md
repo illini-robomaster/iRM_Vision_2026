@@ -73,8 +73,12 @@ pipeline settings from the actual camera configuration.
    overwritten automatically. The existing Solver expects nine row-major matrix
    elements and five coefficients `[k1,k2,p1,p2,k3]`.
 
-The browser uses periodically refreshed JPEG snapshots, not a full-rate MJPEG
-stream. Preview images may be resized; detection, calibration, and saved PNG
+The browser uses JPEG snapshots targeting about 15 fps, independently of the
+500 ms status poll, not a full-rate MJPEG stream. Only one preview request is
+in flight, so slow links do not queue stale frames. Actual refresh rate depends
+on network, detection and encoding time; 15 fps is a target, not a guarantee.
+JPEG encoding and network transmission do not hold the camera state mutex.
+Preview images may be resized; detection, calibration, and saved PNG
 images use original image resolution. Sample thumbnails can be enlarged by
 clicking them. The single HTTP request worker has bounded receive/send timeouts;
 this is a local calibration tool, not a production multi-user web server.

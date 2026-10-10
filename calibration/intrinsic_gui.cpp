@@ -235,13 +235,14 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
     reply(fd, 200, "application/javascript; charset=utf-8", script);
     return;
   }
-  std::lock_guard<std::mutex> lock(state.mutex);
+  std::unique_lock<std::mutex> lock(state.mutex);
   state.finish_job();
   if (method == "GET" && path == "/api/status") {
     auto status = state.status();
     status["offline"] = !inputs.empty();
     status["input_index"] = input_index;
     status["input_count"] = inputs.size();
+    lock.unlock();
     reply(fd, 200, "application/json", status.dump());
   } else if (method == "GET" && (path == "/preview.jpg" || path == "/sample.jpg")) {
     cv::Mat image;
@@ -267,6 +268,7 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
       }
     }
     if (image.empty()) throw std::runtime_error("No image available");
+    lock.unlock();
     const double scale = std::min(1.0, 960.0 / image.cols);
     cv::resize(image, image, {}, scale, scale);
     std::vector<uchar> jpeg;
@@ -274,7 +276,9 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
     reply(fd, 200, "image/jpeg", std::string(jpeg.begin(), jpeg.end()));
   } else if (method == "GET" && path == "/intrinsics.yaml") {
     if (!state.result) throw std::runtime_error("No current calibration result");
-    reply(fd, 200, "application/yaml", state.result->yaml());
+    const auto yaml = state.result->yaml();
+    lock.unlock();
+    reply(fd, 200, "application/yaml", yaml);
   } else if (method == "POST") {
     if (state.busy) throw std::runtime_error("Calibration running; sample changes are locked");
     if (path == "/api/capture") {
@@ -339,6 +343,7 @@ void serve(int fd, State & state, const std::string & page, const std::string & 
       reply(fd, 404, "application/json", "{\"error\":\"Unknown route\"}");
       return;
     }
+    lock.unlock();
     reply(fd, 200, "application/json", "{\"ok\":true}");
   } else {
     reply(fd, 404, "application/json", "{\"error\":\"Unknown route\"}");

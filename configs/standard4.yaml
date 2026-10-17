@@ -80,6 +80,15 @@ can_interface: "can0"
 #####-----gimbal参数-----#####
 com_port: "/dev/gimbal"
 
+#####-----minipc参数-----#####
+# Jetson <-> STM32 UART (the STM32 is reached through the flasher's ST-Link
+# VCP). ttyACM/ttyUSB numbering is not stable, so discovery goes through
+# /dev/serial/by-id/. minipc_port wins when that path exists; otherwise the
+# first adapter whose by-id name starts with minipc_port_prefix is used.
+# minipc_port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_STLink_000000000000-if02"
+minipc_port_prefix: "usb-STMicroelectronics_STM32_STLink_"
+minipc_baud: 115200
+
 #####-----planner-----#####
 fire_thresh: 0.003
 

@@ -5,7 +5,6 @@
 
 #include <cstring>
 
-#include "tools/crc.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/yaml.hpp"
@@ -92,24 +91,12 @@ std::string Minipc::resolve_port(const std::string & port, const std::string & p
   return find_by_id(prefix);
 }
 
-uint8_t Minipc::cmd_id() const
-{
-  std::lock_guard<std::mutex> lock(mutex_);
-  return cmd_id_;
-}
-
-uint16_t Minipc::seqnum() const
-{
-  std::lock_guard<std::mutex> lock(mutex_);
-  return seqnum_;
-}
-
 uint32_t Minipc::valid_packet_count() const { return valid_packet_count_.load(); }
 
-MinipcStatus Minipc::status() const
+MinipcState Minipc::state() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  return status_;
+  return state_;
 }
 
 void Minipc::send(uint8_t cmd_id, const void * data)
@@ -145,7 +132,7 @@ Eigen::Quaterniond Minipc::imu_at(std::chrono::steady_clock::time_point timestam
 {
   if (queue_.empty()) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return status_.q;
+    return state_.q;
   }
 
   ImuFrame ahead = queue_.pop();
@@ -173,67 +160,29 @@ void Minipc::on_packet(void * context, const uint8_t * packet, uint8_t cmd_id)
 
 void Minipc::handle_packet(const uint8_t * packet, uint8_t cmd_id)
 {
+  // The STM32 publishes exactly one packet type; anything else on the line is
+  // not ours to interpret.
+  if (cmd_id != BOARD_STATE_CMD_ID) return;
+
+  BoardState data_msg;
+  std::memcpy(&data_msg, packet + DATA_OFFSET, sizeof(data_msg));
+
   const auto timestamp = std::chrono::steady_clock::now();
-  const uint8_t * data = packet + DATA_OFFSET;
+  Eigen::Quaterniond q(data_msg.q[0], data_msg.q[1], data_msg.q[2], data_msg.q[3]);
+  if (!(q.norm() > 1e-6)) {
+    tools::logger()->warn("[Minipc] dropping degenerate quaternion");
+    return;
+  }
+  q.normalize();
 
   std::lock_guard<std::mutex> lock(mutex_);
-  cmd_id_ = cmd_id;
-  std::memcpy(&seqnum_, packet + SEQNUM_OFFSET, sizeof(seqnum_));
-
-  switch (cmd_id) {
-    case GIMBAL_CMD_ID: {
-      GimbalData d;
-      std::memcpy(&d, data, sizeof(d));
-      status_.rel_yaw = d.rel_yaw;
-      status_.rel_pitch = d.rel_pitch;
-      status_.mode = d.mode;
-      status_.debug_int = d.debug_int;
-      break;
-    }
-    case COLOR_CMD_ID: {
-      ColorData d;
-      std::memcpy(&d, data, sizeof(d));
-      status_.my_color = d.my_color;
-      break;
-    }
-    case CHASSIS_CMD_ID: {
-      ChassisData d;
-      std::memcpy(&d, data, sizeof(d));
-      status_.vx = d.vx;
-      status_.vy = d.vy;
-      status_.vw = d.vw;
-      break;
-    }
-    case SELFCHECK_CMD_ID: {
-      SelfcheckData d;
-      std::memcpy(&d, data, sizeof(d));
-      status_.mode = d.mode;
-      status_.debug_int = d.debug_int;
-      break;
-    }
-    case ARM_CMD_ID: {
-      ArmData d;
-      std::memcpy(&d, data, sizeof(d));
-      std::memcpy(status_.floats, d.floats, sizeof(status_.floats));
-      break;
-    }
-    case IMU_CMD_ID: {
-      ImuData d;
-      std::memcpy(&d, data, sizeof(d));
-      Eigen::Quaterniond q(d.w, d.x, d.y, d.z);
-      if (!(q.norm() > 1e-6)) {
-        tools::logger()->warn("[Minipc] dropping degenerate quaternion");
-        break;
-      }
-      q.normalize();
-      status_.q = q;
-      queue_.push({q, timestamp});
-      break;
-    }
-    default:
-      break;
-  }
-
+  state_.q = q;
+  state_.yaw = data_msg.yaw;
+  state_.pitch = data_msg.pitch;
+  state_.bullet_speed = data_msg.bullet_speed;
+  std::memcpy(state_.mode.data(), data_msg.mode, MODE_LEN);
+  state_.timestamp = timestamp;
+  queue_.push({q, timestamp});
   ++valid_packet_count_;
 }
 

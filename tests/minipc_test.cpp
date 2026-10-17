@@ -51,6 +51,21 @@ std::vector<uint8_t> frame(uint8_t cmd_id, const void * data)
   return std::vector<uint8_t>(packet, packet + len);
 }
 
+io::BoardState make_board_state()
+{
+  const float c = std::sqrt(0.5f);  // +90 degrees about z
+  io::BoardState state{};
+  state.q[0] = c;
+  state.q[1] = 0.0f;
+  state.q[2] = 0.0f;
+  state.q[3] = c;
+  state.yaw = -0.5f;
+  state.pitch = 0.25f;
+  state.bullet_speed = 15.0f;
+  state.mode[0] = 0xAA;
+  return state;
+}
+
 void test_crc()
 {
   std::cout << "[crc8]" << std::endl;
@@ -72,25 +87,27 @@ void test_lengths()
   check(io::packet_length(io::CHASSIS_CMD_ID) == 21, "chassis packet is 21 bytes");
   check(io::packet_length(io::SELFCHECK_CMD_ID) == 11, "selfcheck packet is 11 bytes");
   check(io::packet_length(io::ARM_CMD_ID) == 33, "arm packet is 33 bytes");
-  check(io::packet_length(io::IMU_CMD_ID) == 25, "imu packet is 25 bytes");
+  check(io::packet_length(io::BOARD_STATE_CMD_ID) == 38, "board state packet is 38 bytes");
   check(io::packet_length(io::TOTAL_CMD_ID) == 0, "unknown cmd id yields no length");
   check(io::packet_length(0xff) == 0, "out-of-range cmd id yields no length");
-  check(io::packet_length(io::IMU_CMD_ID) <= io::MAX_PACKET_LENGTH, "imu fits MAX_PACKET_LENGTH");
   check(
-    io::MAX_PACKET_LENGTH == io::packet_length(io::ARM_CMD_ID),
+    io::packet_length(io::BOARD_STATE_CMD_ID) <= io::MAX_PACKET_LENGTH,
+    "board state fits MAX_PACKET_LENGTH");
+  check(
+    io::MAX_PACKET_LENGTH == io::packet_length(io::BOARD_STATE_CMD_ID),
     "MAX_PACKET_LENGTH is the largest packet");
 }
 
 void test_framing()
 {
   std::cout << "[framing]" << std::endl;
-  const io::ImuData imu{1.0f, 0.0f, 0.0f, 0.0f};
-  const auto f = frame(io::IMU_CMD_ID, &imu);
+  const auto state = make_board_state();
+  const auto f = frame(io::BOARD_STATE_CMD_ID, &state);
 
-  check(f.size() == 25, "packed imu frame is 25 bytes");
+  check(f.size() == 38, "packed board state frame is 38 bytes");
   check(f[0] == 'S' && f[1] == 'T', "header is 'ST'");
-  check(f[io::DATA_LENGTH_OFFSET] == sizeof(io::ImuData), "data_len matches the struct");
-  check(f[io::CMD_ID_OFFSET] == io::IMU_CMD_ID, "cmd id survives packing");
+  check(f[io::DATA_LENGTH_OFFSET] == sizeof(io::BoardState), "data_len matches the struct");
+  check(f[io::CMD_ID_OFFSET] == io::BOARD_STATE_CMD_ID, "cmd id survives packing");
   check(f[f.size() - 2] == 'E' && f[f.size() - 1] == 'D', "tail is 'ED'");
   check(
     f[f.size() - 3] == tools::get_crc8(f.data(), f.size() - 3, 0x00),
@@ -106,7 +123,7 @@ void test_roundtrip()
   const io::ChassisData chassis{3.5f, -4.5f, 0.25f};
   const io::SelfcheckData selfcheck{2, 129};
   const io::ArmData arm{{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}};
-  const io::ImuData imu{0.5f, 0.5f, 0.5f, 0.5f};
+  const auto board_state = make_board_state();
 
   struct Case
   {
@@ -115,7 +132,7 @@ void test_roundtrip()
   };
   const Case cases[] = {{io::GIMBAL_CMD_ID, &gimbal},   {io::COLOR_CMD_ID, &color},
                         {io::CHASSIS_CMD_ID, &chassis}, {io::SELFCHECK_CMD_ID, &selfcheck},
-                        {io::ARM_CMD_ID, &arm},         {io::IMU_CMD_ID, &imu}};
+                        {io::ARM_CMD_ID, &arm},         {io::BOARD_STATE_CMD_ID, &board_state}};
 
   for (const auto & c : cases) {
     const auto f = frame(c.cmd_id, c.data);
@@ -132,21 +149,25 @@ void test_roundtrip()
   }
 }
 
-void test_quaternion()
+void test_board_state()
 {
-  std::cout << "[quaternion]" << std::endl;
-  // +90 degrees about z, in wxyz order.
-  const float c = std::sqrt(0.5f);
-  const io::ImuData imu{c, 0.0f, 0.0f, c};
-  const auto f = frame(io::IMU_CMD_ID, &imu);
+  std::cout << "[board state]" << std::endl;
+  const auto state = make_board_state();
+  const auto f = frame(io::BOARD_STATE_CMD_ID, &state);
 
-  io::ImuData decoded{};
+  io::BoardState decoded{};
   std::memcpy(&decoded, f.data() + io::DATA_OFFSET, sizeof(decoded));
-  check(
-    decoded.w == c && decoded.x == 0.0f && decoded.y == 0.0f && decoded.z == c,
-    "wxyz payload round-trips bit-for-bit");
 
-  const Eigen::Quaterniond q(decoded.w, decoded.x, decoded.y, decoded.z);
+  check(
+    decoded.q[0] == state.q[0] && decoded.q[3] == state.q[3],
+    "wxyz payload round-trips bit-for-bit");
+  check(decoded.yaw == state.yaw && decoded.pitch == state.pitch, "motor angles survive");
+  check(decoded.bullet_speed == state.bullet_speed, "bullet speed survives");
+  check(
+    std::memcmp(decoded.mode, state.mode, io::MODE_LEN) == 0,
+    "opaque mode bytes survive unmodified");
+
+  const Eigen::Quaterniond q(decoded.q[0], decoded.q[1], decoded.q[2], decoded.q[3]);
   const Eigen::Vector3d ypr = tools::eulers(q.normalized(), 2, 1, 0) * 57.3;
   // eulers() round-trips through a rotation matrix, so allow a little slack.
   check(
@@ -161,8 +182,8 @@ void test_quaternion()
 void test_resync()
 {
   std::cout << "[resync]" << std::endl;
-  const io::ImuData imu{1.0f, 0.0f, 0.0f, 0.0f};
-  const auto good = frame(io::IMU_CMD_ID, &imu);
+  const auto state = make_board_state();
+  const auto good = frame(io::BOARD_STATE_CMD_ID, &state);
 
   // garbage ahead of a good frame
   {
@@ -187,7 +208,7 @@ void test_resync()
   // data_len disagreeing with the cmd id
   {
     auto bad = good;
-    bad[io::DATA_LENGTH_OFFSET] = 11;  // imu really carries 16
+    bad[io::DATA_LENGTH_OFFSET] = sizeof(io::BoardState) - 1;
     Collected out;
     io::MinipcParser parser;
     parser.feed(bad.data(), bad.size(), &collect, &out);
@@ -204,7 +225,7 @@ void test_resync()
     io::MinipcParser parser;
     parser.feed(stream.data(), stream.size(), &collect, &out);
     check(
-      out.cmd_ids.size() == 1 && out.cmd_ids[0] == io::IMU_CMD_ID,
+      out.cmd_ids.size() == 1 && out.cmd_ids[0] == io::BOARD_STATE_CMD_ID,
       "unknown cmd id is skipped and the next frame still parses");
   }
 
@@ -250,11 +271,13 @@ int run_live(const std::string & config_path)
 
     const auto now = std::chrono::steady_clock::now();
     const Eigen::Vector3d ypr = tools::eulers(minipc.imu_at(now), 2, 1, 0) * 57.3;
+    const auto st = minipc.state();
     const uint32_t count = minipc.valid_packet_count();
 
-    std::cout << "cmd=0x" << std::hex << static_cast<int>(minipc.cmd_id()) << std::dec
-              << " packets=" << count << " (+" << (count - last_count) << ")"
-              << " yaw=" << ypr[0] << " pitch=" << ypr[1] << " roll=" << ypr[2] << std::endl;
+    std::cout << "packets=" << count << " (+" << (count - last_count) << ")"
+              << " imu_yaw=" << ypr[0] << " imu_pitch=" << ypr[1] << " imu_roll=" << ypr[2]
+              << " motor_yaw=" << st.yaw << " motor_pitch=" << st.pitch
+              << " bullet_speed=" << st.bullet_speed << " mode=" << int(st.mode[0]) << std::endl;
     last_count = count;
   }
   return 0;
@@ -280,7 +303,7 @@ int main(int argc, char * argv[])
   test_lengths();
   test_framing();
   test_roundtrip();
-  test_quaternion();
+  test_board_state();
   test_resync();
 
   if (failures == 0) {

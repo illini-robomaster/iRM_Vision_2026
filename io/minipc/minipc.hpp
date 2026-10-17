@@ -2,6 +2,7 @@
 #define IO__MINIPC__MINIPC_HPP
 
 #include <Eigen/Geometry>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -17,28 +18,22 @@
 namespace io
 {
 
-// Latest state reported by the STM32. Mirrors the firmware's status_data_t:
-// every packet updates only the fields it carries, so a caller must check
-// cmd_id() before trusting a group of fields (SELFCHECK and GIMBAL both write
-// mode/debug_int, for instance).
-struct MinipcStatus
+// Decoded board_state packet: the single message the Jetson receives over this
+// link. yaw/pitch are measured motor angles (offset-corrected), not attitude,
+// so they are not derivable from q. mode is opaque to the protocol.
+struct MinipcState
 {
-  uint8_t my_color = 0;  // 0: red, 1: blue
-  float rel_yaw = 0;
-  float rel_pitch = 0;
-  uint8_t mode = 0;
-  uint8_t debug_int = 0;
-  float vx = 0;
-  float vy = 0;
-  float vw = 0;
-  float floats[6] = {0, 0, 0, 0, 0, 0};
   Eigen::Quaterniond q = Eigen::Quaterniond::Identity();
+  float yaw = 0;
+  float pitch = 0;
+  float bullet_speed = 0;
+  std::array<uint8_t, MODE_LEN> mode{};
+  std::chrono::steady_clock::time_point timestamp;
 };
 
 // UART link to the STM32 control board, reachable through the flasher's
 // USB-serial adapter (ST-Link VCP). The port is discovered under
-// /dev/serial/by-id/ because ttyACM/ttyUSB numbering is not stable. See
-// iRM_Vision_2023/docs/comm_protocol.md for the packet format.
+// /dev/serial/by-id/ because ttyACM/ttyUSB numbering is not stable.
 class Minipc
 {
 public:
@@ -52,6 +47,9 @@ public:
   // contract. Falls back to the latest sample when nothing newer is buffered.
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
 
+  // Latest decoded board state. Meaningful once at least one packet arrived.
+  MinipcState state() const;
+
   // Jetson -> STM32. command.control picks move-yoke vs search-target mode and
   // command.shoot is carried in the debug byte.
   void send(const Command & command);
@@ -59,10 +57,7 @@ public:
   // Jetson -> STM32 raw packet. data must be CMD_TO_LEN[cmd_id] bytes.
   void send(uint8_t cmd_id, const void * data);
 
-  uint8_t cmd_id() const;
-  uint16_t seqnum() const;
   uint32_t valid_packet_count() const;
-  MinipcStatus status() const;
 
 private:
   struct ImuFrame
@@ -85,9 +80,7 @@ private:
   std::mutex write_mutex_;
 
   MinipcParser parser_;
-  MinipcStatus status_;
-  uint8_t cmd_id_ = 0;
-  uint16_t seqnum_ = 0;
+  MinipcState state_;
   std::atomic<uint32_t> valid_packet_count_{0};
 
   // PopWhenFull keeps the freshest samples if the consumer stalls.

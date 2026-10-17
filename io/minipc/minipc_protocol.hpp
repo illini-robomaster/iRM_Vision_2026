@@ -27,7 +27,7 @@ enum MinipcCmdId : uint8_t
   CHASSIS_CMD_ID = 0x02,
   SELFCHECK_CMD_ID = 0x03,
   ARM_CMD_ID = 0x04,
-  IMU_CMD_ID = 0x05,
+  BOARD_STATE_CMD_ID = 0x05,
   TOTAL_CMD_ID
 };
 
@@ -62,14 +62,23 @@ struct __attribute__((packed)) ArmData
   float floats[6];
 };
 
-// STM32 IMU attitude in wxyz order. Sourced from IMU_typeC::INS_quat in
-// iRM_Embedded_2023/shared/bsp/bsp_imu.h.
-struct __attribute__((packed)) ImuData
+// The opaque mode byte in BoardState. The protocol assigns no meaning to it; a
+// consumer that wants flags keeps its own bitfield and copies the byte into it.
+inline constexpr uint8_t MODE_LEN = 1;
+
+// STM32 -> Jetson state, sent as one packet so the Jetson gets an atomic
+// snapshot (attitude and gimbal state from the same instant).
+//
+// yaw/pitch are the MEASURED motor angles with the gimbal calibration offset
+// removed, i.e. the same frame as the angles the Jetson commands. They are not
+// derivable from q: the encoder carries gear backlash and a per-robot offset.
+struct __attribute__((packed)) BoardState
 {
-  float w;
-  float x;
-  float y;
-  float z;
+  float q[4];   // IMU attitude, w x y z
+  float yaw;    // measured motor angle, offset-corrected
+  float pitch;  // measured motor angle, offset-corrected
+  float bullet_speed;
+  uint8_t mode[MODE_LEN];  // opaque; semantics belong to the consumer
 };
 
 // These pin the wire format: any change here is a protocol change and must be
@@ -79,12 +88,16 @@ static_assert(sizeof(ColorData) == 1, "color data length is part of the wire pro
 static_assert(sizeof(ChassisData) == 12, "chassis data length is part of the wire protocol");
 static_assert(sizeof(SelfcheckData) == 2, "selfcheck data length is part of the wire protocol");
 static_assert(sizeof(ArmData) == 24, "arm data length is part of the wire protocol");
-static_assert(sizeof(ImuData) == 16, "imu data length is part of the wire protocol");
+static_assert(sizeof(BoardState) == 29, "board state length is part of the wire protocol");
+static_assert(offsetof(BoardState, yaw) == 16, "board state.yaw offset changed");
+static_assert(offsetof(BoardState, pitch) == 20, "board state.pitch offset changed");
+static_assert(offsetof(BoardState, bullet_speed) == 24, "board state.bullet_speed offset changed");
+static_assert(offsetof(BoardState, mode) == 28, "board state.mode offset changed");
 
 enum
 {
   HT_LEN = 9,
-  MINIPC_DATA_LEN_MAX = sizeof(ArmData),
+  MINIPC_DATA_LEN_MAX = sizeof(BoardState),
   MAX_PACKET_LENGTH = MINIPC_DATA_LEN_MAX + HT_LEN,
   MIN_PACKET_LENGTH = sizeof(ColorData) + HT_LEN,
   SEQNUM_OFFSET = 2,
@@ -96,7 +109,7 @@ enum
 // Data-section length per cmd id, indexed by MinipcCmdId.
 inline constexpr uint8_t CMD_TO_LEN[TOTAL_CMD_ID] = {sizeof(GimbalData),  sizeof(ColorData),
                                                      sizeof(ChassisData), sizeof(SelfcheckData),
-                                                     sizeof(ArmData),     sizeof(ImuData)};
+                                                     sizeof(ArmData),     sizeof(BoardState)};
 
 // Total packet length in bytes for cmd_id, or 0 when the id is unknown.
 uint8_t packet_length(uint8_t cmd_id);

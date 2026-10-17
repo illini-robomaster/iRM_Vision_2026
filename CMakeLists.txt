@@ -87,6 +87,8 @@ add_subdirectory(tasks/omniperception)
 add_executable(auto_buff_debug_mpc src/auto_buff_debug_mpc.cpp)
 add_executable(uav src/uav.cpp)
 add_executable(uav_debug src/uav_debug.cpp)
+# 相对角差（视觉伺服）入口：不需要电机/云台姿态反馈，can_command_mode: "relative"
+add_executable(relative_aim src/relative_aim.cpp)
 
 # target_link_libraries(standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 # target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
@@ -97,6 +99,7 @@ add_executable(uav_debug src/uav_debug.cpp)
 target_link_libraries(auto_buff_debug_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io ${CERES_LIBRARIES})
 target_link_libraries(uav ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(uav_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+target_link_libraries(relative_aim ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
 ##################calibration################
 add_executable(capture calibration/capture.cpp)
@@ -138,6 +141,7 @@ add_executable(usbcamera_test tests/usbcamera_test.cpp)
 add_executable(handeye_test tests/handeye_test.cpp)
 add_executable(dm_test tests/dm_test.cpp)
 add_executable(minimum_vision_system tests/minimum_vision_system.cpp)
+add_executable(relative_servo_test tests/relative_servo_test.cpp)
 
 target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 target_link_libraries(auto_buff_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
@@ -154,6 +158,7 @@ target_link_libraries(usbcamera_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 target_link_libraries(handeye_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 target_link_libraries(dm_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 target_link_libraries(minimum_vision_system ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+target_link_libraries(relative_servo_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
 add_executable(gimbal_test tests/gimbal_test.cpp)
 target_link_libraries(gimbal_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)

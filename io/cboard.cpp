@@ -13,14 +13,34 @@ CBoard::CBoard(const std::string & config_path)
   can_(read_yaml(config_path), std::bind(&CBoard::callback, this, std::placeholders::_1))
 // 注意: callback的运行会早于Cboard构造函数的完成
 {
-  tools::logger()->info("[Cboard] Waiting for q...");
-  queue_.pop(data_ahead_);
-  queue_.pop(data_behind_);
+  if (wait_imu_) {
+    tools::logger()->info("[Cboard] Waiting for q...");
+    queue_.pop(data_ahead_);
+    queue_.pop(data_behind_);
+  } else {
+    // 板上不发四元数（读不到电机/云台姿态）时用这个分支：构造立即返回，
+    // imu_at() 恒返回单位四元数，视觉链路不依赖姿态反馈。
+    tools::logger()->warn("[Cboard] cboard_wait_imu=false：不等四元数，imu_at() 返回单位四元数");
+    data_ahead_.q = Eigen::Quaterniond::Identity();
+    data_behind_.q = Eigen::Quaterniond::Identity();
+    data_ahead_.timestamp = std::chrono::steady_clock::time_point{};
+    data_behind_.timestamp = std::chrono::steady_clock::time_point{};
+  }
+
+  if (command_mode_ == CommandMode::relative) {
+    tools::logger()->info(
+      "[Cboard] 相对角差模式：0x{:X} 上发 Δyaw/Δpitch（int16 BE ×1e4 rad）", relative_canid_);
+  }
+
   tools::logger()->info("[Cboard] Opened.");
 }
 
+bool CBoard::relative() const { return command_mode_ == CommandMode::relative; }
+
 Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
+  if (!wait_imu_) return Eigen::Quaterniond::Identity();
+
   if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
 
   while (true) {
@@ -44,11 +64,53 @@ Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestam
   return q_c;
 }
 
+namespace
+{
+// 角度 → int16（单位 1e-4 rad），饱和而不是回绕：超范围时按 ±3.2767 rad 截断，
+// 避免 int16 溢出把「往右转」变成「往左转」。
+int16_t encode_angle_1e4(double rad)
+{
+  const double scaled = rad * 1e4;
+  if (scaled >= 32767.0) return 32767;
+  if (scaled <= -32768.0) return -32768;
+  return static_cast<int16_t>(std::lround(scaled));
+}
+}  // namespace
+
+void encode_relative_command(const Command & command, uint8_t data[8])
+{
+  data[0] = static_cast<uint8_t>((command.control ? 0x01 : 0x00) | (command.shoot ? 0x02 : 0x00));
+  data[1] = 0;
+
+  const int16_t dyaw = encode_angle_1e4(command.yaw);
+  const int16_t dpitch = encode_angle_1e4(command.pitch);
+  data[2] = static_cast<uint8_t>((dyaw >> 8) & 0xFF);
+  data[3] = static_cast<uint8_t>(dyaw & 0xFF);
+  data[4] = static_cast<uint8_t>((dpitch >> 8) & 0xFF);
+  data[5] = static_cast<uint8_t>(dpitch & 0xFF);
+  data[6] = 0;
+  data[7] = 0;
+}
+
 void CBoard::send(Command command) const
 {
   can_frame frame;
-  frame.can_id = send_canid_;
   frame.can_dlc = 8;
+
+  // 相对角差模式：只发 Δyaw/Δpitch，不发绝对角（见 documentation/relative_can_protocol.md）
+  if (command_mode_ == CommandMode::relative) {
+    frame.can_id = relative_canid_;
+    encode_relative_command(command, frame.data);
+
+    try {
+      can_.write(&frame);
+    } catch (const std::exception & e) {
+      tools::logger()->warn("{}", e.what());
+    }
+    return;
+  }
+
+  frame.can_id = send_canid_;
   frame.data[0] = (command.control) ? 1 : 0;
   frame.data[1] = (command.shoot) ? 1 : 0;
   frame.data[2] = (int16_t)(command.yaw * 1e4) >> 8;
@@ -110,6 +172,20 @@ std::string CBoard::read_yaml(const std::string & config_path)
   quaternion_canid_ = tools::read<int>(yaml, "quaternion_canid");
   bullet_speed_canid_ = tools::read<int>(yaml, "bullet_speed_canid");
   send_canid_ = tools::read<int>(yaml, "send_canid");
+
+  // 新增可选键（缺省 = 旧行为）：can_command_mode / relative_canid / cboard_wait_imu
+  const auto command_mode = tools::optional_string(yaml, "can_command_mode", "absolute");
+  if (command_mode == "relative") {
+    command_mode_ = CommandMode::relative;
+  } else if (command_mode == "absolute") {
+    command_mode_ = CommandMode::absolute;
+  } else {
+    throw std::runtime_error(
+      "Unknown can_command_mode: '" + command_mode + "' (expected \"absolute\" or \"relative\")");
+  }
+
+  relative_canid_ = yaml["relative_canid"] ? yaml["relative_canid"].as<int>() : 0xFE;
+  wait_imu_ = tools::optional_bool(yaml, "cboard_wait_imu", true);
 
   if (!yaml["can_interface"]) {
     throw std::runtime_error("Missing 'can_interface' in YAML configuration.");

@@ -77,6 +77,26 @@ bullet_speed_canid: 0x101
 send_canid: 0xff
 can_interface: "can0"
 
+#####-----CAN 上行命令语义（新增键，缺省 = 旧行为）-----#####
+# absolute: send_canid(0xff) 上发「绝对」yaw/pitch（旧协议，需要电控/电机有姿态反馈）
+# relative: relative_canid 上发「相对角差」Δyaw/Δpitch（视觉伺服，不需要电机位姿）
+#           协议见 documentation/relative_can_protocol.md
+# 用 ./build/relative_aim 驱动云台时必须改成 "relative"（否则该程序拒绝启动）
+can_command_mode: "absolute"
+relative_canid: 0xFE
+# cboard_wait_imu: false -> 构造不阻塞等四元数，imu_at() 恒返回单位四元数。
+# 板上不再发 0x100 时必须设 false，否则 CBoard 构造会一直卡在 "Waiting for q..."
+cboard_wait_imu: true
+
+#####-----视觉伺服（相对角差）参数，配合 can_command_mode: "relative"-----#####
+servo_gain: 1.0            # 单帧角差比例系数，1.0 = 直接下发当前偏差
+servo_deadband_deg: 0.1    # 偏差小于该值不发（抑制抖动），0 = 关闭死区
+servo_max_step_deg: 20     # 单帧最大角差，防止首帧 / 换目标时猛甩
+servo_yaw_sign: 1          # 转向反了就改成 -1
+servo_pitch_sign: 1        # 转向反了就改成 -1（默认沿用 CBoard：向上为负）
+servo_yaw_offset_deg: 0    # 静态偏置（相机-枪管安装误差）
+servo_pitch_offset_deg: 0  # 静态偏置（弹道下坠近似补偿，手动填）
+
 #####-----gimbal参数-----#####
 com_port: "/dev/gimbal"
 

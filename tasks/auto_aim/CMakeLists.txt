@@ -12,6 +12,7 @@ add_library(auto_aim OBJECT
     detector.cpp            # 传统方法检测，依赖 Classifier；ov:: 随 classifier 头文件去掉
     solver.cpp
     aimer.cpp
+    visual_servo.cpp        # 相对角差（视觉伺服），只用 xyz_in_gimbal，不需要电机位姿
     target.cpp
     tracker.cpp
     voter.cpp

@@ -27,27 +27,30 @@
 | 端到端 dry-run（离线 demo 回放跑出非零角差） | ⚠️ **只验证到「角差数值正确」，没拿到 `control=1` 的命令**——被 §5 的 tracker 问题挡住 |
 | 直播页面显示相对角差 | ❌ 未做（下次第一件事，§4） |
 | 固件侧（电控）按增量执行的 handler | ❌ 未做（参考实现在协议文档里） |
-| git 提交 | ❌ 全部改动仍未提交（见 §2、§8） |
+| git 提交 | ✅ 已提交并推送 `44d15df`（`origin/main` 与本地 HEAD 一致）；仅 `.vscode/c_cpp_properties.json` 留在本地未提交（见 §2） |
 
-## 2. 未提交改动清单（`git status`）
+## 2. 改动清单与提交状态
 
-已改动（tracked）：
+**已提交并推送**：`44d15df feat(io): 新增 CAN 相对角差（视觉伺服）命令通道`
+（`git --no-pager log --oneline -1 origin/main` 与本地 HEAD 相同）。
+
+本次提交包含（tracked 改动 + 新文件）：
 
 - `CMakeLists.txt`（新增 `relative_aim`、`relative_servo_test` 目标）
 - `tasks/auto_aim/CMakeLists.txt`（`visual_servo.cpp` 进 `auto_aim` 库）
 - `io/cboard.hpp`（`CommandMode` 枚举、`encode_relative_command()` 声明、`relative()`）
 - `io/cboard.cpp`（构造读新键、`send()` 分支、相对帧编码、`wait_imu_`）
 - `configs/standard4.yaml`（新增可选键，含注释）
-- ⚠️ `.vscode/c_cpp_properties.json` —— **本机 IntelliSense 改动，按 AGENTS §9.4 不要提交**；
-  提交前 `git checkout -- .vscode/c_cpp_properties.json`（会丢本机的 include 调整，介意就留着但别 `git add`）
-
-新增（untracked，需要 `git add` 明确路径）：
-
 - `src/relative_aim.cpp`
 - `tasks/auto_aim/visual_servo.hpp`、`tasks/auto_aim/visual_servo.cpp`
 - `tests/relative_servo_test.cpp`
-- `documentation/relative_can_protocol.md`
-- `documentation/handoff_relative_servo.md`（本文）
+- `documentation/relative_can_protocol.md`、`documentation/handoff_relative_servo.md`
+
+**仍留在工作区、不要提交**：
+
+- ⚠️ `.vscode/c_cpp_properties.json` —— 本机 IntelliSense 改动，按 AGENTS §9.4 不提交；
+  不想要了就 `git checkout -- .vscode/c_cpp_properties.json`（会丢本机 include 调整，介意就留着别 `git add`）
+
 
 ## 3. 今天已经跑过的验证（可直接复现）
 
@@ -230,7 +233,8 @@ sed 's/^min_confidence: 0.8/min_confidence: 0.6/; s/^min_detect_count: 5/min_det
 #         第 6 行 servo cmd 的 control 很可能还是 0（§5 的 tracker 问题）
 
 # b) 浏览器看直播（本次的真正目标）
-./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=replay -n=0 -servo -stream=8080
+#    注意 replay/bench 下 -n=0 会被当成 300 帧（`:218`），要一直看就用 -m=live，Ctrl+C 退出
+./build/detect_freq_visual_test -c=configs/detect_freq.yaml -m=live -servo -stream=8080
 #   本机浏览器：http://127.0.0.1:8080/        脚本自检：
 curl -s -o /tmp/snap.jpg http://127.0.0.1:8080/snapshot.jpg
 #   画面 = 检测框 + 4 行原有指标 + 2 行 servo（与 imshow 完全一样）
@@ -304,22 +308,25 @@ sed 's/^min_confidence: 0.8/min_confidence: 0.6/; s/^min_detect_count: 5/min_det
 冲突等等，全都写在 `documentation/relative_can_protocol.md`（§3 帧格式、§5 验证步骤、§6 调参顺序、§7 局限）。
 **固件没合入之前不要开闭环**（否则视觉侧发的 `0x0FE` 会被当成未知帧或误触发）。
 
-## 8. 提交前 checklist（AGENTS §7 / §9）
+## 8. 之后提交时的 checklist（AGENTS §7 / §9）
 
-- [ ] `make -C build/ relative_aim relative_servo_test detect_freq_visual_test -j$(nproc)` 通过
-- [ ] `./build/relative_servo_test` → 22 checks, 0 failures
-- [ ] `clang-format -i` 改过的 cpp/hpp；`awk 'length > 100'` 检查行宽（`.clang-format` ColumnLimit=100）
+第一次提交已完成（`44d15df`，已推送）。下面是**后续**（§4 的 HUD / §5 的排查）提交时照抄：
+
+- [x] `make -C build/ relative_aim relative_servo_test -j$(nproc)` 通过（`detect_freq_visual_test` 改完后再加进这条）
+- [x] `./build/relative_servo_test` → 22 checks, 0 failures
+- [x] 没有残留临时调试打印（今天那段 `[dbg]` 已删）
+- [x] `git push origin main` 后 `origin/main` == 本地 HEAD（`44d15df`）
+- [ ] 改 `tests/detect_freq_visual_test.cpp` 后：`clang-format -i`，`awk 'length > 100'` 查行宽
 - [ ] 无 Eigen 3.4 API（`Eigen::last` / `seq` / `reshaped` …）、无 `{{}}` 矩阵初始化、无 fmt 直接格式化 chrono
-- [ ] 没有残留临时调试打印（今天那段 `[dbg]` 已删）
-- [ ] `git add` **指定路径**：`CMakeLists.txt tasks/auto_aim/CMakeLists.txt io/cboard.hpp io/cboard.cpp configs/standard4.yaml src/relative_aim.cpp tasks/auto_aim/visual_servo.hpp tasks/auto_aim/visual_servo.cpp tests/relative_servo_test.cpp documentation/relative_can_protocol.md documentation/handoff_relative_servo.md`
-- [ ] **不要** `git add .vscode/`、`build/`、`logs/`、`third_party/`、`*.engine`
-- [ ] commit 首行 `feat(io): 新增 CAN 相对角差（视觉伺服）命令通道`，正文写实测命令与结果
-- [ ] `git push origin main`，再核对 `git --no-pager log --oneline -1 origin/main` 与本地 HEAD SHA 一致
+- [ ] `git add` **指定路径**，**不要** `git add .vscode/` / `build/` / `logs/` / `third_party/` / `*.engine`
+- [ ] commit 首行 `<type>(<scope>): <中文摘要>`，正文写实测命令与结果（数字必须是真跑出来的）
+- [ ] push 后核对 `git --no-pager log --oneline -1 origin/main` 与本地 HEAD SHA 一致
 
-建议拆成两次提交（可审阅性更好）：
-1. `feat(io): 新增 CAN 相对角差命令通道`（`io/cboard.*` + `configs/standard4.yaml` + `tests/relative_servo_test.cpp` 的编码部分）
-2. `feat(auto_aim): 新增 VisualServo 相对角差生成与 relative_aim 入口`（`tasks/auto_aim/visual_servo.*`、
-   `src/relative_aim.cpp`、两份 CMake、`documentation/*.md`）
+后续如果改动跨多个模块，按下面拆（可审阅性更好）：
+1. `feat(test): detect_freq_visual_test 叠加相对角差 HUD`（只动 `tests/detect_freq_visual_test.cpp`）
+2. `fix(auto_aim): 修 tracker 在 demo 上的 NaN 发散`（确证后单独一次，只动 `tasks/auto_aim/target.*`）
+3. `feat(auto_aim): relative_aim 接入 <真机配置>`（如需要）
+
 
 ## 9. 速查
 
@@ -332,6 +339,6 @@ sed 's/^min_confidence: 0.8/min_confidence: 0.6/; s/^min_detect_count: 5/min_det
 | 配置键读取 | `io/cboard.cpp:176-188`、`tasks/auto_aim/visual_servo.cpp:13-22` |
 | 单测 | `./build/relative_servo_test` |
 | 端到端 dry-run | `./build/relative_aim -c=<cfg> -dry-run -n=60` |
-| 直播页面 | `./build/detect_freq_visual_test -c=<cfg> -m=replay -n=0 -servo -stream=8080` |
+| 直播页面 | `./build/detect_freq_visual_test -c=<cfg> -m=live -servo -stream=8080`（replay 下 `-n=0` 等于 300 帧） |
 | 本机注意 | 短选项必须 `-c=`；`timeout -s INT`；`build/` 别删（`/home/irm/sp_vision_25` 是它的旧路径符号链接） |
 

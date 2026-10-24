@@ -77,7 +77,6 @@ done
 - 手眼外参（`R_camera2gimbal` / `t_camera2gimbal`）**仍未标定**：默认路径用
   `relative_reference: "camera_optical"`，不需要它；改成 `gimbal` 会在启动时明确报缺键。
 
-
 ---
 
 ## 4. 离线自检与 dry-run

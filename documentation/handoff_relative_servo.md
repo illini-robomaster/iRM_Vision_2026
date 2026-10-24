@@ -375,10 +375,12 @@ sed 's/^min_confidence: 0.8/min_confidence: 0.6/; s/^min_detect_count: 5/min_det
 | 事情 | 命令 / 位置 |
 |---|---|
 | 协议与固件参考实现 | `documentation/relative_can_protocol.md` |
-| 角差纯函数 | `tasks/auto_aim/visual_servo.cpp:31-41`（`angles`）、`:43-60`（`shape`） |
-| 选目标 / 首帧不发 | `tasks/auto_aim/visual_servo.cpp:62-102` |
-| CAN 相对帧编码 | `io/cboard.cpp:80-96`（`encode_relative_command`）、`:98-112`（`send` 分支） |
-| 配置键读取 | `io/cboard.cpp:176-188`、`tasks/auto_aim/visual_servo.cpp:13-22` |
+| 角差纯函数 | `tasks/auto_aim/visual_servo.cpp:36-47`（`angles`）、`:48-66`（`shape`）、`:11-25`（`load_servo_limits`，两条路径共用） |
+| 选目标 / 首帧不发（tracker 路径） | `tasks/auto_aim/visual_servo.cpp:67-107` |
+| 当前帧观测（选目标 / PnP / 参考系 / 时效 / 量化） | `tasks/auto_aim/current_relative.cpp`（`solve_current_angles` `:120-206`、`CurrentRelativeEstimator::update` `:298` 起） |
+| CAN 相对帧编码 | `io/cboard.cpp:91-110`（`encode_relative_command`）、`:112-140`（`send` 分支） |
+| 量化唯一实现 | `io/command.hpp`（`io::quantize_angle_1e4`） |
+| 配置键读取 | `io/cboard.cpp:196-230`、`tasks/auto_aim/visual_servo.cpp:11-25`、`tasks/auto_aim/current_relative.cpp:207-290` |
 | 单测 | `./build/relative_servo_test` |
 | 端到端 dry-run | `./build/relative_aim -c=<cfg> -dry-run -n=60` |
 | 直播页面 | `./build/relative_aim -c=configs/relative_current.yaml -stream=8080`（HUD 自带头） |

@@ -1,5 +1,5 @@
 # =============================================================================
-# 老 USB2.0 相机 MindVision MV-SUA133GC-T1V-C 的配置（接在实机上的第一手验证用）
+# MindVision MV-SUA133GC-T1V-C（USB3.0 接口；历史上一度挂在 USB2.0 Type-B 无锁线上只能跑 35.7fps）
 #
 # 只服务于「取流 / 检测」这类程序：
 #   ./build/camera_test -c=configs/mv_sua133gc.yaml -d      # 只验取流（帧率直接打在日志里）
@@ -8,11 +8,14 @@
 # planner、cboard 等键，请用完整配置并复制本文件的相机设置和内参，不要沿用其他相机的外参。
 #
 # 关于链路速度与帧率：
+#   相机本体：MV-SUA133GC-T1V-C，SN 043070620316（仓库里 configs/relative_current.yaml 的内参
+#     就来自这枚相机的标定 records/calibration/2026-10-10_16-23-58_0，RMS 0.224px @1280x1024；
+#     当时用的是**旧 USB 2.0 Type-B 无锁线**（日志写明 480Mbps），换线不影响光学/内参）
 #   2026-10-24 换 USB3.0 Type-B 线后（Genesys Hub，协商 5Gbps，bus 2 addr 4，SN 043070620316）：
 #     1280x1024  ~120.5 fps  0/0/1 丢帧（3×60s，帧间隔 p50 8.29ms / p95 ≤8.50ms / 抖动 std ≤0.57ms）
 #     原始数据 1.25 MB/帧 × 120 fps ≈ 150 MB/s
 #     测法：./build/camera_test -c=configs/mv_sua133gc.yaml -w=5 -t=65   （-w 预热不计入统计）
-#   换线前（旧线接 480M 口/hub，USB2.0 带宽已跑满）的历史基线：
+#   换线前（旧线 USB 2.0 Type-B 无锁，接 480M 口/hub，带宽已跑满）的历史基线：
 #     1280x1024  ~35.7 fps   0 丢帧      （原始 1.25 MB/帧 ≈ 45 MB/s，USB2.0 已跑满）
 #     1024x768   ~59 fps     0 丢帧
 #     800x600    ~95 fps     0 丢帧

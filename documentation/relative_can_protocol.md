@@ -1,11 +1,11 @@
 # 相对角差（视觉伺服）CAN 协议
 
 > 目的：**在视觉侧读不到电机/云台位姿（无编码器、无 IMU 四元数）的情况下驱动云台**。
-> 视觉每帧下发「这一帧观测到的目标偏离参考轴的角差」，电控把角差累加到自己的位置上，
-> 图像上的偏差逐帧收敛到 0。
+> 视觉每帧下发「这一帧观测到的目标偏离参考轴的角差」。这是测量值，不是必须执行的步长。
+> 电控自行选择位置/速度闭环策略；不得在定时器里反复累加最后一条测量值。
 >
 > ⚠️ 关键区分（旧版本这里写混了）：视觉侧算的是**每帧重新观测的角差**，
-> 不是「位置目标」；把角差累加成位置是**电控侧**的动作（见 §3.1）。
+> 不是「位置目标」。将测量值转成控制量是**电控侧**的职责，不要求逐帧累加。
 > 参考轴有两种，必须选一种并向电控说清用的是哪种，见 §2。
 >
 > 实现：`tasks/auto_aim/current_relative.{hpp,cpp}`（当前帧观测，默认路径）、
@@ -13,6 +13,10 @@
 > 入口：`src/relative_aim.cpp`（目标 `relative_aim`）
 > 自检：`tests/relative_servo_test.cpp`（目标 `relative_servo_test`，不需要任何硬件）
 > 验收记录：`documentation/relative_acceptance.md`
+>
+> **2026-10-24 更新**：握手/会话/启停/颜色及接板验收以同目录
+> `vision_cboard_protocol.md`、`vision_cboard_acceptance.md`、`vision_cboard_handoff.md` 为准。
+> `relative_aim` 默认 v1；实发必须显式配置 ID 并确认，`0xFE` 不是实机分配值。
 
 ---
 
@@ -20,7 +24,7 @@
 
 | | 旧模式 `can_command_mode: "absolute"` | 新模式 `can_command_mode: "relative"` |
 | --- | --- | --- |
-| CAN ID | `send_canid`（`standard4.yaml` = `0xff`） | `relative_canid`（默认 `0xFE`） |
+| CAN ID | `send_canid`（`standard4.yaml` = `0xff`） | 显式 `relative_canid`（接板前由电控确认） |
 | 语义 | 世界系**绝对** yaw / pitch | 目标相对**参考轴**的角差 Δyaw / Δpitch |
 | 依赖 | 电控/电机要有姿态反馈才能闭环 | **不需要**任何姿态反馈 |
 | 视觉来源 | `Aimer`（EKF + 弹道预测，世界系） | `CurrentRelativeEstimator`（当前帧观测，默认）或 `VisualServo`（`armor.xyz_in_gimbal`，旧跟踪路径） |
@@ -80,7 +84,7 @@
 ## 3. CAN 帧格式（标准帧，DLC = 8）
 
 ```
-ID  = relative_canid            (默认 0xFE，可在 configs/*.yaml 改)
+ID  = relative_canid            (必须显式配置并与电控确认；下例 0xFE 仅为示例)
 DLC = 8
 
 byte0: bit0 = control          1 = 本帧有效，请按角差移动
@@ -133,7 +137,8 @@ ID 0xFE  data = 01 00 04 D2 FD C9 00 00
 
 
 ```c
-/* 收到 0xFE 时调用；在「收到帧」的事件里执行，不要用定时器重复累加同一帧 */
+/* 仅演示测量解码；v1 还需握手/会话、本地启停与接收超时门控。
+   电控自行实现受限闭环，不直接把这段示意当作运动控制代码。 */
 void on_relative_cmd(const uint8_t data[8]) {
     if (!(data[0] & 0x01)) {          /* control=0：没有目标，保持当前位置 */
         return;
@@ -145,27 +150,18 @@ void on_relative_cmd(const uint8_t data[8]) {
     float delta_yaw   = dyaw   / 10000.0f;   /* rad */
     float delta_pitch = dpitch / 10000.0f;   /* rad，向上为负 */
 
-    /* 增量叠加到「目标位置」，再由位置环/速度环去执行 */
-    gimbal_yaw_target   += delta_yaw;
-    gimbal_pitch_target += delta_pitch;
-
-    /* 安全：目标位置限幅、速度限幅、超时保护都要保留 */
-    gimbal_yaw_target   = clampf(gimbal_yaw_target,   YAW_MIN,   YAW_MAX);
-    gimbal_pitch_target = clampf(gimbal_pitch_target, PITCH_MIN, PITCH_MAX);
-
-    /* 建议再限制单帧增量（与视觉侧 servo_max_step_deg 独立的一道保护） */
+    /* 将 delta_yaw / delta_pitch 交给电控自己的受限闭环。
+       保留位置/速度/加速度限制；丢目标/停车/接收超时都清除测量有效性。 */
 }
 ```
 
 要点：
 
-1. **事件驱动累加**：只在收到新帧时加一次。若固件用 1 kHz 定时器反复累加同一帧，
-   云台会失控。
-2. `control=0` 时必须**停止累加**（停住，不要继续按上一条命令走）。
+1. **事件驱动更新测量**：一帧只更新一次。禁止在定时器里无限重复累加同一观测。
+2. `control=0` 时必须**清除有效测量**（停住，不要继续按上一条命令走）。
 3. 建议加**接收超时**（例如 100 ms 没收到有效帧就停），防止视觉掉线后云台
    按最后的增量继续跑。
-4. 增量叠加到「目标位置」，不要直接叠加到电流/力矩上；位置环/速度环的平滑
-   会引入延迟，延迟越大越容易振荡（见第 7 节调参）。
+4. 电控选择闭环策略，不将测量直接叠加到电流/力矩；考虑图像和执行延迟。
 
 ---
 
@@ -176,7 +172,7 @@ void on_relative_cmd(const uint8_t data[8]) {
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `can_command_mode` | `"absolute"` | 改成 `"relative"` 才启用相对角差帧；`relative_aim` 启动时会先校验它 |
-| `relative_canid` | `0xFE` | 相对角差帧 CAN ID；必须在 `1..0x7FF`，且**不能**与 `quaternion_canid` / `bullet_speed_canid` / `send_canid` 冲突（冲突直接抛异常） |
+| `relative_canid` | 入口无隐式默认 | 相对角差帧 CAN ID；必须在 `0..0x7FF`，不得与其它协议 ID 冲突；非核实 vcan 需 `vision_can_ids_confirmed: true` |
 | `cboard_wait_imu` | `true` | 相对角差模式**必须** `false`：`CBoard` 构造不再 `queue_.pop()` 阻塞等四元数，`imu_at()` 恒返回单位四元数 |
 | `relative_send_interval_ms` | `0` | 有效帧的最小发送间隔；`0` = 每帧都发。无效帧不受限（立刻发出去让电控停） |
 
@@ -228,22 +224,19 @@ make -C build/ relative_aim relative_servo_test camera_test -j$(nproc)
 #    判据：出现 control=1 且 raw/tx 非零的连续帧；无效帧的 reason 只有
 #          no_target / out_of_image / color_filtered / reprojection_error 等可解释原因
 
-# 3) 软件链路验收（不需要 CAN 硬件，也不需要 sudo 之外的东西）：
-#    在**私有 netns** 里建 vcan0，candump 独立接收，确认字节布局
-unshare -Urn --map-root-user bash -c '
-  ip link add dev vcan0 type vcan && ip link set up vcan0
-  candump -tz vcan0 > /tmp/candump.txt &
-  sleep 1
-  ./build/relative_aim -c=/tmp/rel_vcan.yaml -n=120      # 该配置只把 can_interface 换成 vcan0
+# 3) 软件链路验收（隔离 netns + 独立模拟电控，不触碰 can0）：
+unshare -Urn sh -c '
+  ip link add vcan_test type vcan && ip link set vcan_test up &&
+  python3 /home/irm/iRM-Vision-2026/scripts/vision_cboard_sim.py
 '
-#    /tmp/rel_vcan.yaml = cp configs/relative_current_replay.yaml 后仅改 can_interface: "vcan0"
 
 # 4) 真机抓包（CAN 已起来：ip link set up can0，1Mbps）
 candump -tz can0,0FE:7FF
 #    静止不动时应能看到 0xFE 帧；
 #    control=0 时 data[2..5] 全 0；control=1 时 Δyaw/Δpitch 随目标偏移变化
 
-# 5) 低速闭环：先把 servo_gain 调到 0.2、servo_max_step_deg 调到 3，
+# 5) 低速闭环：在电控侧限速/限位，视觉默认不做整形；如确需旧整形，先置
+#    relative_tx_shape: true，再调 servo_gain / servo_max_step_deg。
 #    用手/纸板在画面里左右移动，确认：
 #      - 云台朝目标方向转（方向反了就改 servo_yaw_sign / servo_pitch_sign）
 #      - 转过去后 Δyaw/Δpitch 变小（说明闭环成立）

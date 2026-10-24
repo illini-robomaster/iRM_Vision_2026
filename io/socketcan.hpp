@@ -5,12 +5,16 @@
 #include <net/if.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -41,7 +45,7 @@ public:
       while (!quit_) {
         std::this_thread::sleep_for(100ms);
 
-        if (ok_) continue;
+        if (ok_ || quit_) continue;
 
         if (read_thread_.joinable()) read_thread_.join();
 
@@ -60,19 +64,28 @@ public:
     tools::logger()->info("SocketCAN destructed.");
   }
 
-  // 写入一帧（阻塞调用方，直到内核接受）。
+  // 写入一帧（最多阻塞 SO_SNDTIMEO = 20ms，见 open()）。
   // 必须检查「写出去的字节数 == 整帧大小」：SocketCAN 默认不会截断，但只要返回值
   // 不是 sizeof(can_frame) 就说明这一帧没有完整送达，调用方（CBoard::send）据此
   // 判断发送失败，而不是「抛出没抛异常」。
+  //
+  // fd 生命周期由 fd_mutex_ 保护：守护线程可能正在 close()/open() 重连，
+  // 没有这把锁就存在「往刚被关掉、编号又被复用给别的 fd 的 socket_fd_ 写」的经典 bug。
   void write(can_frame * frame) const
   {
+    std::lock_guard<std::mutex> lock(fd_mutex_);
     if (socket_fd_ == -1) throw std::runtime_error("SocketCAN 未打开，无法写入");
 
     const ssize_t n = ::write(socket_fd_, frame, sizeof(can_frame));
-    if (n == -1)
+    if (n == -1) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        throw std::runtime_error(
+          "SocketCAN 发送超时（TX 队列满或总线无 ACK，接口 " + interface_ + "）：这一帧没有发出去");
+      }
       throw std::runtime_error(
         std::string("SocketCAN write 失败：") + std::strerror(errno) + "（接口 " + interface_ +
         "）");
+    }
     if (n != static_cast<ssize_t>(sizeof(can_frame)))
       throw std::runtime_error(
         "SocketCAN write 只写入了 " + std::to_string(n) + "/" + std::to_string(sizeof(can_frame)) +
@@ -83,8 +96,9 @@ private:
   std::string interface_;
   int socket_fd_;
   int epoll_fd_;
-  bool quit_;
-  bool ok_;
+  std::atomic<bool> quit_;
+  std::atomic<bool> ok_;
+  mutable std::mutex fd_mutex_;  // 保护 socket_fd_ / epoll_fd_ 的创建、关闭与写入
   std::thread read_thread_;
   std::thread daemon_thread_;
   can_frame frame_;
@@ -93,10 +107,24 @@ private:
 
   void open()
   {
+    std::lock_guard<std::mutex> lock(fd_mutex_);
+
     socket_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (socket_fd_ < 0) throw std::runtime_error("Error opening socket!");
 
-    ifreq ifr;
+    // 发送超时：TX 队列满 / 总线没有 ACK 时 write() 最多卡 20ms 就返回 EAGAIN。
+    // 不设的话 write() 会一直阻塞在内核里，而它正握着 fd_mutex_ ——
+    // 守护线程的重连会被一起卡住，视觉线程就「卡在 send() 上」了。
+    struct timeval send_timeout;
+    send_timeout.tv_sec = 0;
+    send_timeout.tv_usec = 20000;
+    if (setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout)) < 0) {
+      ::close(socket_fd_);
+      socket_fd_ = -1;
+      throw std::runtime_error("Cannot set SocketCAN send timeout");
+    }
+
+    ifreq ifr{};
     std::strncpy(ifr.ifr_name, interface_.c_str(), IFNAMSIZ - 1);
     if (ioctl(socket_fd_, SIOCGIFINDEX, &ifr) < 0) {
       ::close(socket_fd_);
@@ -133,8 +161,8 @@ private:
     }
 
     // 接收线程
+    ok_ = true;  // 必须在线程启动前置位，避免守护线程误判后 join 活跃接收线程。
     read_thread_ = std::thread([this]() {
-      ok_ = true;
       while (!quit_) {
         std::this_thread::sleep_for(10us);
 
@@ -162,6 +190,7 @@ private:
 
   void read()
   {
+    // fd 只在接收线程 join 之后关闭/重建；这里与发送共享 fd，但没有并发 close。
     if (epoll_fd_ == -1 || socket_fd_ == -1) throw std::runtime_error("SocketCAN 未打开，无法读取");
 
     int num_events = epoll_wait(epoll_fd_, events_, MAX_EVENTS, 2);
@@ -194,6 +223,7 @@ private:
     // 关闭后必须把 fd 复位成 -1：否则守护线程下一轮 close() 会对同一个编号（可能已被
     // 别的 open 复用）再关一次 —— 那是"关掉别人 fd"的经典 bug；write() 也会往已关闭的
     // 编号里写。
+    std::lock_guard<std::mutex> lock(fd_mutex_);
     if (socket_fd_ != -1) {
       if (epoll_fd_ != -1) epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, socket_fd_, NULL);
       ::close(socket_fd_);

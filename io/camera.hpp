@@ -13,6 +13,9 @@ class CameraBase
 public:
   virtual ~CameraBase() = default;
   virtual void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) = 0;
+  virtual bool read_for(
+    cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+    std::chrono::milliseconds timeout) = 0;
 };
 
 // 视频文件回放后端（x86_64 / WSL2 离线调试用；接不到相机时替代 mindvision / hikrobot）
@@ -27,6 +30,9 @@ public:
   VideoFile(const std::string & path, double frame_rate, bool loop);
 
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
+  bool read_for(
+    cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+    std::chrono::milliseconds timeout) override;
 
 private:
   void rewind();
@@ -43,6 +49,9 @@ class Camera
 public:
   Camera(const std::string & config_path);
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
+  bool read_for(
+    cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+    std::chrono::milliseconds timeout);
 
 private:
   std::unique_ptr<CameraBase> camera_;

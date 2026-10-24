@@ -64,6 +64,8 @@ enemy_color: "blue"
 # "current" 路径的全部可选键；缺键时用括号里的默认值，这份配置把关键项都显式写出来，
 # 便于现场直接改数字、也便于日后再看时说清「当时用的是哪一版」。
 relative_reference: "camera_optical"   # (camera_optical) | gimbal
+relative_output_frame: "camera_optical" # 坐标系，不是协议版本；保留 relative_reference 兼容键
+relative_tx_shape: false               # 当前帧测量值不做 gain/死区/步长整形
 relative_max_frame_age_ms: 120         # (120) 观测年龄超时 → control=0，不把旧观测当新值发
 relative_send_interval_ms: 0           # (0) 0 = 每帧都发；设 50 则有效帧最多 20Hz
 relative_min_confidence: 0.8           # (min_confidence) 再上一道置信度阈值
@@ -93,3 +95,12 @@ can_interface: "can0"
 can_command_mode: "relative"
 cboard_wait_imu: false
 relative_canid: 0xFE
+vision_protocol: "v1"
+# 以下是待电控确认的候选 ID，不是可直接接板的默认值。
+vision_handshake_request_canid: 0x310
+vision_handshake_response_canid: 0x311
+vision_control_canid: 0x312
+vision_can_ids_confirmed: false         # 接板前确认全部 4 个 ID 后再改 true
+vision_control_timeout_ms: 500
+relative_frame_timeout_ms: 120
+relative_tx_rate_hz: 0

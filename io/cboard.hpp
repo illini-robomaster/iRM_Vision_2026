@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -82,6 +84,17 @@ public:
   // 相对角差帧的 CAN ID（can_command_mode: relative 时才有意义）
   int relative_canid() const;
 
+  // 原始 8 字节帧发送（vision↔CBoard v1 协议用：HELLO_ACK / 角差帧都要指定 ID）。
+  // 返回「整帧是否完整写进 SocketCAN」；失败已按 1Hz 限流打印 errno。
+  bool send_raw(uint32_t can_id, const uint8_t data[8]) const;
+
+  // 追加一个「所有上行帧」的观察者。回调运行在 SocketCAN 接收线程里：
+  // 只做解析/入队，不要在里面发帧或做耗时操作（否则会拖慢全部接收）。
+  using FrameHandler = std::function<void(uint32_t can_id, const uint8_t * data, uint8_t dlc)>;
+  void add_frame_handler(FrameHandler handler);
+  // 等待正在执行的回调完成后清空；调用方必须先注销再销毁捕获对象。
+  void clear_frame_handlers();
+
 private:
   struct IMUData
   {
@@ -97,11 +110,16 @@ private:
   int relative_canid_ = 0xFE;
   bool wait_imu_ = true;  // false：不阻塞等四元数，imu_at() 恒返回单位四元数
 
-  SocketCAN can_;
   IMUData data_ahead_;
   IMUData data_behind_;
 
   int quaternion_canid_, bullet_speed_canid_, send_canid_;
+
+  // 上行帧观察者（v1 协议）：callback 在 SocketCAN 接收线程里遍历，所以要加锁
+  mutable std::mutex handlers_mutex_;
+  std::vector<FrameHandler> handlers_;
+  // 最后构造、最先析构：接收线程不能访问尚未构造/已经析构的成员。
+  SocketCAN can_;
 
   void callback(const can_frame & frame);
 

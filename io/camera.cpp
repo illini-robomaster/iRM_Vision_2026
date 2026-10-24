@@ -94,6 +94,26 @@ void Camera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timesta
   camera_->read(img, timestamp);
 }
 
+bool Camera::read_for(
+  cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+  std::chrono::milliseconds timeout)
+{
+  return camera_->read_for(img, timestamp, timeout);
+}
+
+bool VideoFile::read_for(
+  cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+  std::chrono::milliseconds timeout)
+{
+  // 本地文件解码本身不保证截止时间；这里只限制回放节流等待，不支持网络视频。
+  if (next_t_ - std::chrono::steady_clock::now() > timeout) {
+    std::this_thread::sleep_for(timeout);
+    return false;
+  }
+  read(img, timestamp);
+  return !img.empty();
+}
+
 VideoFile::VideoFile(const std::string & path, double frame_rate, bool loop)
 : path_(path), frame_rate_(frame_rate), loop_(loop)
 {

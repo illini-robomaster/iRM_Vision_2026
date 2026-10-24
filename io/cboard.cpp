@@ -36,6 +36,12 @@ CBoard::CBoard(const std::string & config_path)
 
 bool CBoard::relative() const { return command_mode_ == CommandMode::relative; }
 
+void CBoard::clear_frame_handlers()
+{
+  std::lock_guard<std::mutex> lock(handlers_mutex_);
+  handlers_.clear();
+}
+
 int CBoard::relative_canid() const { return relative_canid_; }
 
 Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
@@ -93,8 +99,10 @@ void encode_relative_command(const Command & command, uint8_t data[8])
   // 非有限角度 = 无效观测：control 清零、角差写 0（见 cboard.hpp 的说明）
   const bool finite = std::isfinite(command.yaw) && std::isfinite(command.pitch);
   const bool control = command.control && finite;
-  // control=0 时不带射（shoot 也清零）：帧里不保留任何"有效的旧值"
-  const bool shoot = control && command.shoot;
+  // shoot 恒为 0：相对角差帧表达的是「这一帧测到的角差」，
+  // 单看角差无法判断是否对准，开火必须由电控/后续逻辑决定（v1 协议只传角差）。
+  // 即使调用方写了 shoot=true 也不置位 —— 编码层强制，避免上层误发。
+  const bool shoot = false;
 
   data[0] = static_cast<uint8_t>((control ? 0x01 : 0x00) | (shoot ? 0x02 : 0x00));
   data[1] = 0;
@@ -147,9 +155,46 @@ bool CBoard::send(Command command) const
   }
 }
 
+bool CBoard::send_raw(uint32_t can_id, const uint8_t data[8]) const
+{
+  if (can_id > CAN_SFF_MASK || data == nullptr) return false;
+  can_frame frame;
+  std::memset(&frame, 0, sizeof(frame));
+  frame.can_id = static_cast<canid_t>(can_id);
+  frame.can_dlc = 8;
+  std::memcpy(frame.data, data, 8);
+
+  try {
+    can_.write(&frame);
+    return true;
+  } catch (const std::exception & e) {
+    if (should_log_failure())
+      tools::logger()->warn("[Cboard] 原始帧 0x{:X} 发送失败：{}", can_id, e.what());
+    return false;
+  }
+}
+
+void CBoard::add_frame_handler(FrameHandler handler)
+{
+  if (!handler) return;
+  std::lock_guard<std::mutex> lock(handlers_mutex_);
+  handlers_.push_back(std::move(handler));
+}
+
 void CBoard::callback(const can_frame & frame)
 {
+  if ((frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0) return;
   auto timestamp = std::chrono::steady_clock::now();
+
+  // 先给 v1 协议的观察者（vision_cboard）看一遍原始帧，再走旧的解析分支：
+  // 旧分支不认识 0x1xx 之外的 ID，顺序不影响已有行为。
+  {
+    std::lock_guard<std::mutex> lock(handlers_mutex_);
+    for (const auto & handler : handlers_) handler(frame.can_id, frame.data, frame.can_dlc);
+  }
+
+  // 协议观察者需要看畸形 DLC 以 fail-closed；旧遥测解析则不能读缺失字节。
+  if (frame.can_dlc != 8) return;
 
   if (frame.can_id == quaternion_canid_) {
     auto x = (int16_t)(frame.data[0] << 8 | frame.data[1]) / 1e4;
@@ -210,9 +255,9 @@ std::string CBoard::read_yaml(const std::string & config_path)
   // 相对角差帧的 ID 校验（只校验标准帧 11 位范围）：写错成 0x800+ 会变成扩展帧标志位，
   // 或者与四元数/弹速/绝对角命令撞车 —— 两者都会让电控侧解析出错，启动时就拒绝。
   if (command_mode_ == CommandMode::relative) {
-    if (relative_canid_ <= 0 || relative_canid_ > 0x7FF) {
+    if (relative_canid_ < 0 || relative_canid_ > 0x7FF) {
       throw std::runtime_error(
-        "relative_canid 必须在 1..0x7FF（标准帧 11 位）之间，当前值 = " +
+        "relative_canid 必须在 0..0x7FF（标准帧 11 位）之间，当前值 = " +
         std::to_string(relative_canid_));
     }
     if (

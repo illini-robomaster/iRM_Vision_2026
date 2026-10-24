@@ -116,6 +116,9 @@ public:
   MindVision(double exposure_ms, double gamma, const std::string & vid_pid);
   ~MindVision() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
+  bool read_for(
+    cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+    std::chrono::milliseconds timeout) override;
 
 private:
   struct CameraData
@@ -127,7 +130,7 @@ private:
   MindVisionConfig config_;
   CameraHandle handle_;
   int height_, width_;  // 采集缓冲尺寸（按相机最大分辨率分配，真实输出尺寸以帧头为准）
-  bool quit_, ok_;
+  std::atomic<bool> quit_, ok_;
   std::thread capture_thread_;
   std::thread daemon_thread_;
   tools::ThreadSafeQueue<CameraData> queue_;

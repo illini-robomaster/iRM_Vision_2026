@@ -1,0 +1,45 @@
+# 独立命名空间测试专用；四个 ID 均不是实机分配值。
+camera_name: "video"
+video_path: "assets/demo/demo.avi"
+video_loop: true
+video_frame_rate: 30
+camera_matrix: [1818.3669452465165, 0, 751.06226574703498, 0, 1822.494494078506, 530.43671556112133, 0, 0, 1]
+distort_coeffs: [-0.077944626599568856, 0.15447826031486889, -0.0025714394278524674, 0.00083016311301273629, 0]
+yolo_name: yolov5
+min_confidence: 0.8
+yolov5_backend: "trt"
+yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
+yolov5_onnx_path: "assets/yolov5_0526.onnx"
+use_traditional: false
+use_roi: false
+enemy_color: "blue"
+relative_output_frame: "camera_optical"
+relative_reference: "camera_optical"
+relative_tx_shape: false
+relative_max_frame_age_ms: 120
+relative_min_confidence: 0.8
+relative_max_reprojection_px: 15
+relative_min_depth_m: 0.1
+relative_filter_color: true
+servo_gain: 1.0
+servo_deadband_deg: 0.0
+servo_max_step_deg: 20
+servo_yaw_sign: 1
+servo_pitch_sign: 1
+servo_yaw_offset_deg: 0
+servo_pitch_offset_deg: 0
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xFF
+can_interface: "vcan_test"
+can_command_mode: "relative"
+cboard_wait_imu: false
+relative_canid: 0x300
+vision_protocol: "v1"
+vision_handshake_request_canid: 0x301
+vision_handshake_response_canid: 0x302
+vision_control_canid: 0x303
+vision_can_ids_confirmed: false
+vision_control_timeout_ms: 500
+relative_frame_timeout_ms: 120
+relative_tx_rate_hz: 0

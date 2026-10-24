@@ -7,16 +7,20 @@
 // 用法：./build/relative_servo_test        # 全部通过返回 0，有 FAIL 返回 1
 // ---------------------------------------------------------------------------
 #include <fmt/core.h>
+#include <unistd.h>
 
 #include <cmath>
 #include <cstdint>
+#include <fstream>
+#include <future>
 #include <limits>
+#include <opencv2/opencv.hpp>
 #include <string>
+#include <thread>
 #include <vector>
 
-#include <opencv2/opencv.hpp>
-
 #include "io/cboard.hpp"
+#include "io/vision_cboard.hpp"
 #include "tasks/auto_aim/current_relative.hpp"
 #include "tasks/auto_aim/visual_servo.hpp"
 
@@ -80,8 +84,7 @@ void test_shape()
   limits.max_step = 20.0 * kDeg;
 
   auto inside = VisualServo::shape(limits, 0.05 * kDeg, -0.05 * kDeg);
-  expect(
-    inside.control && near(inside.yaw, 0) && near(inside.pitch, 0), "shape: 死区内不发角差");
+  expect(inside.control && near(inside.yaw, 0) && near(inside.pitch, 0), "shape: 死区内不发角差");
 
   auto outside = VisualServo::shape(limits, 0.2 * kDeg, -0.2 * kDeg);
   expect(
@@ -122,7 +125,7 @@ void test_encode()
 
   io::Command command{true, true, 0.1234, -0.0567, 0.0};
   io::encode_relative_command(command, data);
-  expect(data[0] == 0x03, "encode: data[0] bit0=control bit1=shoot");
+  expect(data[0] == 0x01, "encode: data[0] bit0=control，bit1=shoot 恒为 0（强制不开火）");
   expect(data[1] == 0 && data[6] == 0 && data[7] == 0, "encode: 保留字节为 0");
   expect(decode_i16(data + 2) == 1234, "encode: dYaw 大端 int16，单位 1e-4 rad");
   expect(decode_i16(data + 4) == -567, "encode: dPitch 大端 int16，负值");
@@ -213,10 +216,8 @@ void test_encode_hardening()
   expect(io::quantize_angle_1e4(-3.2768) == -32768, "quantize: -3.2768 rad 饱和到 -32768");
   expect(io::quantize_angle_1e4(100.0) == 32767, "quantize: 超大幅度不回绕（+100 rad -> 32767）");
   expect(
-    io::quantize_angle_1e4(nan) == 0 && io::quantize_angle_1e4(inf) == 0,
-    "quantize: NaN/Inf -> 0");
-  expect(
-    io::quantize_angle_1e4(0.00016) == 2, "quantize: 0.00016 rad 四舍五入为 2（×1e4）");
+    io::quantize_angle_1e4(nan) == 0 && io::quantize_angle_1e4(inf) == 0, "quantize: NaN/Inf -> 0");
+  expect(io::quantize_angle_1e4(0.00016) == 2, "quantize: 0.00016 rad 四舍五入为 2（×1e4）");
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +243,7 @@ cv::Mat make_camera_matrix()
 cv::Mat make_distort(const std::vector<double> & values)
 {
   cv::Mat d(1, static_cast<int>(values.size()), CV_64F);
-  for (std::size_t i = 0; i < values.size(); ++i)
-    d.at<double>(0, static_cast<int>(i)) = values[i];
+  for (std::size_t i = 0; i < values.size(); ++i) d.at<double>(0, static_cast<int>(i)) = values[i];
   return d;
 }
 
@@ -292,8 +292,8 @@ void test_current_geometry()
   expect(ok && reproj < 0.5, "current: 无噪声角点的平均重投影误差 < 0.5 px");
 
   // 带畸变时必须同样恢复（证明 distort_coeffs 真被传进 solvePnP / projectPoints）
-  const auto D = make_distort({-0.07563482581065475, 0.274743634586268, 0.001505720850613093,
-                               0.0007716521495002592, 0});
+  const auto D = make_distort(
+    {-0.07563482581065475, 0.274743634586268, 0.001505720850613093, 0.0007716521495002592, 0});
   auto cam_distorted = cam;
   cam_distorted.distort_coeffs = D;
   ok = solve_current_angles(
@@ -426,14 +426,13 @@ void test_estimator()
   expect(
     obs.reason == "ok" && obs.reprojection < 1.0 && obs.target_id.find(',') == std::string::npos,
     "est: 有效帧 reason=ok、重投影小、target_id 不含逗号（CSV 安全）");
-  expect(
-    std::abs(obs.raw_yaw - std::atan2(0.3, 2.0)) < 1e-3,
-    "est: raw 角差与解析解一致（左正）");
+  expect(std::abs(obs.raw_yaw - std::atan2(0.3, 2.0)) < 1e-3, "est: raw 角差与解析解一致（左正）");
 
   // 颜色过滤
   const auto red = make_armor(4 /*red:one:small*/, 0.9f, points, {0.5f, 0.5f});
   obs = est.observe({red}, size, t0, t0);
-  expect(!obs.valid && obs.reason == "color_filtered", "est: 颜色与 enemy_color 不符 -> color_filtered");
+  expect(
+    !obs.valid && obs.reason == "color_filtered", "est: 颜色与 enemy_color 不符 -> color_filtered");
 
   // 置信度
   obs = est.observe({make_armor(3, 0.5f, points, {0.5f, 0.5f})}, size, t0, t0);
@@ -467,14 +466,560 @@ void test_estimator()
     obs.candidates == 2 && obs.target_id == auto_aim::target_id(near_center),
     "est: 选目标与检测列表顺序无关（确定性）");
 
-  // 整形：max_step 生效且被记录
+  // 整形：max_step 生效且被记录（相对角差默认**不做**整形，这里显式打开）
   auto small_step = limits;
   small_step.max_step = 2.0 / 57.3;  // 2deg
-  const CurrentRelativeEstimator est_clamped(geo, small_step, filter);
+  auto shaped = filter;
+  shaped.shape_tx = true;
+  const CurrentRelativeEstimator est_clamped(geo, small_step, shaped);
   obs = est_clamped.observe({blue}, size, t0, t0);
   expect(
     obs.valid && obs.clamped && std::abs(obs.tx_yaw) <= 2.0 / 57.3 + 1e-9,
-    "est: 超出 max_step 时 TX 被截断并标记 clamped");
+    "est: relative_tx_shape=true 时 TX 被 max_step 截断并标记 clamped");
+
+  // 默认（relative_tx_shape 未开）：TX 只做符号/偏置，gain/死区/限幅一律不参与，
+  // 否则 CSV 上的 TX 就不再是「这一帧测到的角差」。
+  auto no_shape = limits;
+  no_shape.max_step = 1e-4;  // 若误走 shape()，TX 会被压到 0
+  no_shape.deadband = 10.0;  // 若误走 shape()，TX 会变成 0
+  const CurrentRelativeEstimator est_no_shape(geo, no_shape, filter);
+  obs = est_no_shape.observe({blue}, size, t0, t0);
+  expect(
+    obs.valid && !obs.clamped && near(obs.tx_yaw, obs.raw_yaw, 1e-4) && std::abs(obs.tx_yaw) > 1e-3,
+    "est: 默认相对角差 TX 绕过 shape()（gain/死区/限幅不污染测量值）");
+
+  // 符号与静态偏置仍然生效（镜像安装 / 相机-枪管不同轴）
+  auto signed_limits = limits;
+  signed_limits.yaw_sign = -1.0;
+  signed_limits.yaw_offset = 1.0 / 57.3;
+  const CurrentRelativeEstimator est_signed(geo, signed_limits, filter);
+  obs = est_signed.observe({blue}, size, t0, t0);
+  expect(
+    obs.valid && near(obs.tx_yaw, -(obs.raw_yaw + 1.0 / 57.3), 1e-4),
+    "est: 默认路径仍应用 servo_yaw_sign 与 servo_yaw_offset");
+
+  // 过滤覆盖：板端 CONTROL 下发的颜色优先于 config 里的 enemy_color
+  auto_aim::RelativeFilter red_filter = filter;
+  red_filter.enemy_color = auto_aim::Color::red;
+  auto red_armor = make_armor(4 /*red:one:small*/, 0.9f, points, {0.5f, 0.5f});
+  obs = est.observe({red_armor}, size, t0, t0, &red_filter);
+  expect(obs.valid, "est: 颜色覆盖（observe 的 filter 参数）能选中红方装甲板");
+  obs = est.observe({red_armor}, size, t0, t0);
+  expect(
+    !obs.valid && obs.reason == "color_filtered",
+    "est: 不传覆盖时仍按构造时的 enemy_color 过滤（默认行为不变）");
+
+  // 几何回退：最近的一块解不出来时，退到下一块仍然能给出有效观测。
+  // （4 点 PnP 对「尺寸写错」不敏感——物点与距离等比缩放会投影到同一组角点，
+  //   所以这里用「角点被污染」制造几何不可信，和 test_current_geometry 的用例一致。）
+  auto bad_points = points;
+  bad_points[0].x += 80.0f;
+  auto bad = make_armor(3, 0.9f, bad_points, {0.5f, 0.5f});
+  auto good = make_armor(3, 0.9f, points, {0.2f, 0.2f});
+  good.name = auto_aim::ArmorName::two;
+  auto strict_geo = geo;
+  strict_geo.max_reprojection = 5.0;
+  const CurrentRelativeEstimator est_fallback(strict_geo, limits, filter);
+  obs = est_fallback.observe({bad, good}, size, t0, t0);
+  expect(
+    obs.valid && obs.candidates == 2 && obs.target_id == auto_aim::target_id(good) &&
+      obs.target_id != auto_aim::target_id(bad),
+    "est: 最近的候选几何不可信时回退到下一块有效目标");
+}
+
+// ---------------------------------------------------------------------------
+// vision ↔ CBoard v1 协议：编解码 + 会话状态机（不需要 CAN / 相机）
+// ---------------------------------------------------------------------------
+io::VisionProtocolConfig make_v1_config()
+{
+  io::VisionProtocolConfig config;
+  config.v1 = true;
+  config.relative_canid = 0x1A1;
+  config.handshake_request_canid = 0x1A2;
+  config.handshake_response_canid = 0x1A3;
+  config.control_canid = 0x1A4;
+  config.control_timeout_ms = 500.0;
+  config.observation_timeout_ms = 100.0;
+  config.tx_min_interval_ms = 0.0;
+  config.ids_confirmed = true;
+  return config;
+}
+
+void test_vision_codec()
+{
+  uint8_t data[8] = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
+
+  io::encode_handshake_request(0x11223344, data);
+  expect(
+    data[0] == 0x01 && data[1] == 1 && data[2] == 0x11 && data[3] == 0x22 && data[4] == 0x33 &&
+      data[5] == 0x44 && data[6] == 0 && data[7] == 0,
+    "v1: HELLO 字节布局（01 01 session(BE) 00 00）");
+
+  uint8_t version = 0;
+  uint32_t session = 0;
+  expect(
+    io::decode_handshake_request(data, 8, version, session) && version == 1 &&
+      session == 0x11223344,
+    "v1: HELLO 编解码往返");
+
+  io::encode_handshake_response(0x11223344, io::HandshakeStatus::not_ready, data);
+  expect(
+    data[0] == 0x02 && data[1] == 1 && data[6] == 0x01 && data[7] == 0,
+    "v1: HELLO_ACK 字节布局（status 在 data[6]）");
+
+  io::encode_control(0x11223344, true, io::ControlColor::blue, 7, data);
+  expect(
+    data[0] == 0x03 && data[1] == 1 && data[6] == 0x05 && data[7] == 7,
+    "v1: CONTROL 字节布局（enable=1 color=blue seq=7 -> data[6]=0x05）");
+
+  uint32_t sid = 0;
+  bool enable = false;
+  uint8_t color = 0;
+  uint8_t sequence = 0;
+  expect(
+    io::decode_control(data, 8, sid, enable, color, sequence) && sid == 0x11223344 && enable &&
+      color == 2 && sequence == 7,
+    "v1: CONTROL 编解码往返");
+
+  io::encode_control(1, false, io::ControlColor::red, 0, data);
+  expect(data[6] == 0x02, "v1: CONTROL enable=0 时 data[6] 只保留颜色位");
+
+  // 畸形帧必须被结构性拒绝（否则状态机会被垃圾帧带偏）
+  io::encode_control(0x10, true, io::ControlColor::red, 1, data);
+  expect(
+    !io::decode_control(data, 7, sid, enable, color, sequence), "v1: DLC!=8 的 CONTROL 被拒绝");
+
+  io::encode_control(0x10, true, io::ControlColor::red, 1, data);
+  data[0] = 0x02;
+  expect(!io::decode_control(data, 8, sid, enable, color, sequence), "v1: 类型字节不对的帧被拒绝");
+
+  io::encode_control(0x10, true, io::ControlColor::red, 1, data);
+  data[1] = 2;
+  expect(
+    !io::decode_control(data, 8, sid, enable, color, sequence),
+    "v1: CONTROL 版本字节不为 1 被拒绝");
+
+  io::encode_control(0x10, true, io::ControlColor::red, 1, data);
+  data[6] = 0x91;
+  expect(
+    !io::decode_control(data, 8, sid, enable, color, sequence), "v1: CONTROL 保留位非 0 被拒绝");
+
+  expect(
+    io::valid_control_color(1) && io::valid_control_color(2) && !io::valid_control_color(0) &&
+      !io::valid_control_color(3),
+    "v1: 控制颜色只允许 1=red / 2=blue");
+}
+
+void test_vision_session()
+{
+  using Clock = std::chrono::steady_clock;
+  using io::VisionLinkCore;
+  using io::VisionLinkState;
+
+  const auto config = make_v1_config();
+  VisionLinkCore core(config);
+
+  auto now = Clock::now();
+  uint8_t hello[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t frame[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  uint32_t can_id = 0;
+  VisionLinkCore::FrameKind kind = VisionLinkCore::FrameKind::none;
+
+  const io::Command valid{true, false, 0.1, -0.2, 0.0};
+  const io::Command idle{false, false, 0.0, 0.0};
+
+  // ---- READY 之前：HELLO 只得到 NOT_READY，不建立会话 ----
+  io::encode_handshake_request(0xABCD0001, hello);
+  core.on_frame(config.handshake_request_canid, hello, 8, now);
+  auto snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::wait_handshake && !snapshot.has_session,
+    "v1: 未 READY 时 HELLO 不建立会话");
+  expect(
+    core.next_frame(now, can_id, frame, kind) &&
+      kind == VisionLinkCore::FrameKind::handshake_response &&
+      can_id == config.handshake_response_canid && frame[6] == 1,
+    "v1: 未 READY 时回 NOT_READY");
+  core.note_send(true, kind);
+
+  // ---- READY 之后：建立会话，进入 wait_control ----
+  core.set_ready(true, "单测");
+  core.on_frame(config.handshake_request_canid, hello, 8, now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::wait_control && snapshot.has_session &&
+      snapshot.session_id == 0xABCD0001,
+    "v1: READY 时 HELLO 建立会话 -> wait_control");
+  expect(
+    core.next_frame(now, can_id, frame, kind) && frame[6] == 0 && frame[2] == 0xAB &&
+      frame[5] == 0x01,
+    "v1: HELLO_ACK=READY 并回显 session");
+  core.note_send(true, kind);
+
+  // ---- 未 enable：不发角差 ----
+  expect(
+    !core.publish(valid, core.snapshot(now).generation, now), "v1: wait_control 下 publish 不生效");
+  expect(!core.next_frame(now, can_id, frame, kind), "v1: wait_control 下没有角差帧");
+
+  // ---- 旧 / 未知 session 的 CONTROL 被拒绝 ----
+  io::encode_control(0xDEAD0002, true, io::ControlColor::blue, 1, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::wait_control && !snapshot.enable &&
+      core.stats().rejected_session == 1,
+    "v1: 未知 session 的 CONTROL 被拒绝，不改状态");
+
+  // ---- 正确 session + enable -> active ----
+  io::encode_control(0xABCD0001, true, io::ControlColor::blue, 1, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::active && snapshot.enable && snapshot.color == 2 &&
+      snapshot.sequence == 1,
+    "v1: CONTROL enable=1 color=blue -> active");
+
+  // ---- active 下 publish -> 发送线程取到角差帧 ----
+  expect(core.publish(valid, snapshot.generation, now), "v1: active 下 publish 生效");
+  expect(
+    core.next_frame(now, can_id, frame, kind) && kind == VisionLinkCore::FrameKind::relative &&
+      can_id == config.relative_canid,
+    "v1: 角差帧用 relative_canid");
+  expect(
+    (frame[0] & 0x01) != 0 && decode_i16(frame + 2) == 1000 && decode_i16(frame + 4) == -2000 &&
+      (frame[0] & 0x02) == 0,
+    "v1: 角差帧字节 = 量化后的 Δyaw/Δpitch，shoot 位恒为 0");
+  core.note_send(true, kind);
+  expect(!core.next_frame(now, can_id, frame, kind), "v1: 同一份观测只发一次（不重复灌角差）");
+
+  // ---- 同 session 重复 HELLO 幂等 ----
+  const uint32_t generation_before = core.snapshot(now).generation;
+  core.on_frame(config.handshake_request_canid, hello, 8, now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::active && snapshot.enable &&
+      snapshot.generation == generation_before,
+    "v1: 同 session 重复 HELLO 幂等（不清 enable / generation）");
+  expect(
+    core.next_frame(now, can_id, frame, kind) && frame[6] == 0,
+    "v1: 幂等 HELLO 仍然重发 READY（应答可能丢包）");
+  core.note_send(true, kind);
+
+  // ---- 颜色切换：generation +1，变色前的观测被拒绝 ----
+  const uint32_t generation_blue = snapshot.generation;
+  io::encode_control(0xABCD0001, true, io::ControlColor::red, 2, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.color == 1 && snapshot.generation == generation_blue + 1,
+    "v1: CONTROL 换色 -> 颜色生效且 generation+1");
+  expect(
+    !core.publish(valid, generation_blue, now) && core.stats().tx_skipped_generation > 0,
+    "v1: 换色前算出来的观测被拒绝（旧 generation）");
+
+  // ---- 停止：立刻补 control=0 ----
+  io::encode_control(0xABCD0001, false, io::ControlColor::red, 3, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  expect(core.snapshot(now).state == VisionLinkState::stopped, "v1: CONTROL enable=0 -> stopped");
+  expect(
+    core.next_frame(now, can_id, frame, kind) && kind == VisionLinkCore::FrameKind::relative &&
+      frame[0] == 0x00 && decode_i16(frame + 2) == 0 && decode_i16(frame + 4) == 0,
+    "v1: 停止后立刻补发 control=0（不等下一帧图像）");
+  core.note_send(true, kind);
+
+  // ---- 启停复用 ----
+  io::encode_control(0xABCD0001, true, io::ControlColor::red, 4, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  expect(core.snapshot(now).state == VisionLinkState::active, "v1: stopped 后 enable=1 重新激活");
+
+  // ---- 畸形 CONTROL 不刷新心跳 ----
+  core.publish(valid, core.snapshot(now).generation, now);
+  core.next_frame(now, can_id, frame, kind);
+  core.note_send(true, kind);
+
+  now += std::chrono::milliseconds(400);
+  io::encode_control(0xABCD0001, true, io::ControlColor::red, 5, frame);
+  core.on_frame(config.control_canid, frame, 6, now);  // DLC 6 = 畸形
+  expect(core.stats().rejected_malformed >= 1, "v1: 畸形 CONTROL 计入 rejected_malformed");
+  expect(!core.snapshot(now).has_session, "v1: 畸形 CONTROL 立即 fail-closed");
+  now += std::chrono::milliseconds(200);  // 距最后一条合法 CONTROL 已 600ms > 500ms
+  core.poll(now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::control_timeout && !snapshot.has_session &&
+      core.stats().timeouts == 0,
+    "v1: 畸形帧已作废会话，不靠等待超时停车");
+
+  // ---- 超时后旧 session 不再被接受，必须重新握手 ----
+  io::encode_control(0xABCD0001, true, io::ControlColor::red, 6, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  expect(
+    core.snapshot(now).state == VisionLinkState::control_timeout,
+    "v1: 超时后旧 session 的 CONTROL 被忽略");
+
+  io::encode_handshake_request(0xABCD0009, hello);
+  core.on_frame(config.handshake_request_canid, hello, 8, now);
+  snapshot = core.snapshot(now);
+  expect(
+    snapshot.state == VisionLinkState::wait_control && snapshot.session_id == 0xABCD0009,
+    "v1: 超时后重新握手可建立新会话");
+
+  // ---- 版本不兼容 ----
+  io::encode_handshake_request(0xABCD0009, hello);
+  hello[1] = 2;
+  core.on_frame(config.handshake_request_canid, hello, 8, now);
+  // 安全停止帧优先于 ACK。
+  if (core.next_frame(now, can_id, frame, kind) && kind == VisionLinkCore::FrameKind::relative)
+    core.note_send(true, kind);
+  expect(
+    core.next_frame(now, can_id, frame, kind) && frame[6] == 2 && frame[5] == 0x09,
+    "v1: 版本不兼容回 VERSION_MISMATCH（并回显 session）");
+  core.note_send(true, kind);
+  expect(
+    core.snapshot(now).state == VisionLinkState::wait_control && core.stats().rejected_version == 1,
+    "v1: 版本不兼容不改会话状态");
+
+  // ---- 无关 ID 不影响状态 ----
+  const auto before_irrelevant = core.snapshot(now);
+  io::encode_control(0xABCD0009, true, io::ControlColor::blue, 9, frame);
+  core.on_frame(0x777, frame, 8, now);
+  const auto after_irrelevant = core.snapshot(now);
+  expect(
+    after_irrelevant.state == before_irrelevant.state &&
+      after_irrelevant.generation == before_irrelevant.generation,
+    "v1: 与本协议无关的 ID 不改状态");
+
+  // ---- 观测时效：有效观测过期后补 control=0（不依赖下一帧）----
+  io::encode_control(0xABCD0009, true, io::ControlColor::blue, 10, frame);
+  core.on_frame(config.control_canid, frame, 8, now);
+  expect(core.publish(valid, core.snapshot(now).generation, now), "v1: 新会话下 publish 生效");
+  expect(core.next_frame(now, can_id, frame, kind), "v1: 新会话发出角差帧");
+  core.note_send(true, kind);
+  now += std::chrono::milliseconds(150);  // > observation_timeout_ms(100)
+  core.poll(now);
+  expect(
+    core.next_frame(now, can_id, frame, kind) && frame[0] == 0x00,
+    "v1: 有效观测超过 relative_frame_timeout_ms -> 补发 control=0");
+  core.note_send(true, kind);
+
+  // ---- 无效观测（control=0）优先于任何旧样本下发 ----
+  core.publish(idle, core.snapshot(now).generation, now);
+  expect(
+    core.next_frame(now, can_id, frame, kind) && frame[0] == 0x00, "v1: 无效观测 -> control=0 帧");
+  core.note_send(true, kind);
+}
+
+void test_vision_legacy()
+{
+  using Clock = std::chrono::steady_clock;
+  using io::VisionLinkCore;
+
+  io::VisionProtocolConfig config;  // 默认 legacy
+  config.relative_canid = 0xFE;
+  VisionLinkCore core(config);
+
+  auto now = Clock::now();
+  uint8_t frame[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t hello[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  uint32_t can_id = 0;
+  VisionLinkCore::FrameKind kind = VisionLinkCore::FrameKind::none;
+  const io::Command valid{true, false, 0.05, 0.0, 0.0};
+
+  expect(
+    core.snapshot(now).state == io::VisionLinkState::active, "legacy: 没有握手，状态固定 active");
+  expect(core.publish(valid, 0, now), "legacy: publish 直接生效");
+  expect(
+    core.next_frame(now, can_id, frame, kind) && can_id == 0xFE &&
+      kind == VisionLinkCore::FrameKind::relative && frame[0] == 0x01 &&
+      decode_i16(frame + 2) == 500,
+    "legacy: 直接往 relative_canid 发角差帧（与旧版逐字节一致）");
+  core.note_send(true, kind);
+  expect(!core.next_frame(now, can_id, frame, kind), "legacy: 同一份观测不重复发");
+
+  // 上行帧一律忽略（legacy 没有会话/启停语义）
+  io::encode_handshake_request(1, hello);
+  core.on_frame(config.handshake_request_canid, hello, 8, now);
+  expect(
+    core.stats().rx_handshake == 0 && core.snapshot(now).state == io::VisionLinkState::active,
+    "legacy: 不解析任何上行帧（行为与旧版一致）");
+}
+
+void test_vision_safety()
+{
+  using Clock = std::chrono::steady_clock;
+  using namespace std::chrono_literals;
+  io::VisionProtocolConfig config;
+  config.v1 = true;
+  config.relative_canid = 0x300;
+  config.handshake_request_canid = 0x301;
+  config.handshake_response_canid = 0x302;
+  config.control_canid = 0x303;
+  config.tx_min_interval_ms = 1000;
+  io::VisionLinkCore core(config);
+  core.set_ready(true, "test");
+  auto now = Clock::now();
+  uint8_t bytes[8]{};
+  uint32_t id = 0;
+  io::VisionLinkCore::FrameKind kind;
+  const io::Command valid{true, true, 0.1, -0.2};
+  auto hello = [&](uint32_t session) {
+    io::encode_handshake_request(session, bytes);
+    core.on_frame(config.handshake_request_canid, bytes, 8, now);
+  };
+  auto control = [&](uint32_t session, bool enable, io::ControlColor color, uint8_t seq) {
+    io::encode_control(session, enable, color, seq, bytes);
+    core.on_frame(config.control_canid, bytes, 8, now);
+  };
+  auto flush = [&] { core.transmit(now, [](uint32_t, const uint8_t *) { return true; }); };
+  hello(1);
+  flush();
+  now += 501ms;
+  core.poll(now);
+  expect(
+    !core.snapshot(now).has_session && core.stats().timeouts == 1,
+    "safety: wait_control 也受控制超时保护");
+  hello(2);
+  flush();
+  control(2, true, io::ControlColor::blue, 255);
+  const auto blue_generation = core.snapshot(now).generation;
+  expect(
+    !core.publish(valid, blue_generation, now - 1ms),
+    "safety: 即便 generation 相同也拒绝控制生效前采集的缓存图像");
+  core.publish(valid, blue_generation, now);
+  flush();
+  control(2, true, io::ControlColor::blue, 0);
+  expect(core.snapshot(now).sequence == 0, "safety: CONTROL sequence 255→0 正常回绕");
+  control(2, false, io::ControlColor::blue, 255);
+  expect(core.snapshot(now).enable, "safety: 倒序 CONTROL 不覆盖最新控制");
+  control(2, true, io::ControlColor::red, 1);
+  expect(!core.publish(valid, blue_generation, now), "safety: 检测期间换色拒绝旧 generation");
+  expect(
+    core.next_frame(now, id, bytes, kind) && bytes[0] == 0,
+    "safety: 换色立即停止，不受 1Hz 有效帧限频影响");
+  core.note_send(false, kind);
+  expect(core.next_frame(now, id, bytes, kind) && bytes[0] == 0, "safety: 停止发送失败后继续重试");
+  core.note_send(true, kind);
+  core.publish(io::Command{false, false, 0.0, 0.0}, core.snapshot(now).generation, now);
+  expect(
+    core.next_frame(now, id, bytes, kind) && bytes[0] == 0, "safety: 无效观测不受有效帧限频约束");
+  core.note_send(true, kind);
+  now += 1001ms;
+  hello(3);
+  flush();
+  control(3, true, io::ControlColor::blue, 1);
+  core.publish(valid, core.snapshot(now).generation, now);
+  flush();
+  hello(4);
+  expect(
+    core.next_frame(now, id, bytes, kind) && id == config.relative_canid && bytes[0] == 0,
+    "safety: 活动会话切换先发停止再 ACK");
+  core.note_send(true, kind);
+  flush();
+  io::encode_control(4, false, io::ControlColor::blue, 1, bytes);
+  bytes[6] = 0;  // 即使停车帧也必须有合法颜色
+  core.on_frame(config.control_canid, bytes, 8, now);
+  expect(!core.snapshot(now).has_session, "safety: 非法停车颜色同样 fail-closed");
+  hello(5);
+  flush();
+  io::encode_control(5, true, io::ControlColor::blue, 1, bytes);
+  bytes[6] |= 0x80;
+  core.on_frame(config.control_canid, bytes, 8, now);
+  expect(!core.snapshot(now).has_session, "safety: CONTROL 保留位非零立即作废会话");
+  io::encode_handshake_request(6, bytes);
+  bytes[7] = 1;
+  core.on_frame(config.handshake_request_canid, bytes, 8, now);
+  expect(!core.snapshot(now).has_session, "safety: HELLO 保留字节非零不建立会话");
+  bool known = false;
+  expect(
+    !io::can_interface_is_virtual("lo", known) && known, "safety: lo 虽无 device 也不能冒充 vcan");
+  expect(
+    !io::can_interface_is_virtual("no_such_can", known) && !known,
+    "safety: 未知接口不能豁免 ID 确认");
+}
+
+void test_vision_transaction()
+{
+  using namespace std::chrono_literals;
+  auto config = make_v1_config();
+  io::VisionLinkCore core(config);
+  core.set_ready(true, "test");
+  const auto now = std::chrono::steady_clock::now();
+  uint8_t bytes[8]{};
+  io::encode_handshake_request(1, bytes);
+  core.on_frame(config.handshake_request_canid, bytes, 8, now);
+  core.transmit(now, [](uint32_t, const uint8_t *) { return true; });
+  io::encode_control(1, true, io::ControlColor::blue, 1, bytes);
+  core.on_frame(config.control_canid, bytes, 8, now);
+  core.publish(io::Command{true, false, 0.1, 0.0}, core.snapshot(now).generation, now);
+  std::promise<void> writing, release;
+  auto release_future = release.get_future();
+  auto sender = std::async(std::launch::async, [&] {
+    core.transmit(now, [&](uint32_t, const uint8_t *) {
+      writing.set_value();
+      release_future.wait();
+      return true;
+    });
+  });
+  writing.get_future().wait();
+  io::encode_control(1, false, io::ControlColor::blue, 2, bytes);
+  std::promise<void> stopping;
+  auto stop = std::async(std::launch::async, [&] {
+    stopping.set_value();
+    core.on_frame(config.control_canid, bytes, 8, now);
+  });
+  stopping.get_future().wait();
+  expect(
+    stop.wait_for(20ms) == std::future_status::timeout,
+    "safety: 控制变更不能插入资格检查与 SocketCAN 写入之间");
+  release.set_value();
+  sender.get();
+  stop.get();
+  bool zero = false;
+  core.transmit(now, [&](uint32_t, const uint8_t * data) {
+    zero = data[0] == 0;
+    return true;
+  });
+  expect(zero && !core.snapshot(now).enable, "safety: 串行写入后停止帧先于后续有效观测");
+}
+
+void test_vision_configuration()
+{
+  char path[] = "/tmp/vision_config_XXXXXX";
+  const int fd = mkstemp(path);
+  expect(fd >= 0, "config: 创建隔离临时 YAML");
+  if (fd < 0) return;
+  close(fd);
+  const std::string base =
+    "can_command_mode: relative\ncan_interface: lo\nrelative_canid: 0\n"
+    "vision_handshake_request_canid: 0x301\nvision_handshake_response_canid: 0x302\n"
+    "vision_control_canid: 0x303\nrelative_output_frame: camera_optical\n";
+  auto load = [&](const std::string & text, io::VisionProtocolConfig & result) {
+    {
+      std::ofstream file(path);
+      file << text;
+    }
+    try {
+      result = io::load_vision_protocol_config(path);
+      return true;
+    } catch (const std::exception &) {
+      return false;
+    }
+  };
+  io::VisionProtocolConfig result;
+  expect(!load(base, result), "config: lo 不豁免实机 ID 确认");
+  expect(
+    load(base + "vision_can_ids_confirmed: true\n", result) && result.v1 &&
+      result.relative_canid == 0,
+    "config: 默认 v1，坐标系键独立且合法 CAN ID 0x000 保留");
+  expect(
+    !load(base + "vision_protocol: legacy\n", result), "config: 显式 legacy 也不能绕过 ID 确认");
+  expect(
+    !load(base + "vision_can_ids_confirmed: true\nrelative_frame_timeout_ms: .nan\n", result),
+    "config: NaN 超时拒绝启动");
+  expect(
+    !load(base + "vision_can_ids_confirmed: true\nvision_protocol: unknown\n", result),
+    "config: 未知协议拒绝启动");
+  unlink(path);
 }
 
 }  // namespace
@@ -488,6 +1033,12 @@ int main()
   test_pipeline();
   test_current_geometry();
   test_estimator();
+  test_vision_codec();
+  test_vision_session();
+  test_vision_legacy();
+  test_vision_safety();
+  test_vision_transaction();
+  test_vision_configuration();
 
   fmt::print("\n{} checks, {} failures\n", checks, failures);
   return failures == 0 ? 0 : 1;

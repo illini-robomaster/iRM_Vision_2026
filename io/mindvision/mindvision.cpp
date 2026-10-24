@@ -166,6 +166,17 @@ void MindVision::read(cv::Mat & img, std::chrono::steady_clock::time_point & tim
   timestamp = data.timestamp;
 }
 
+bool MindVision::read_for(
+  cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+  std::chrono::milliseconds timeout)
+{
+  CameraData data;
+  if (!queue_.pop_for(data, timeout)) return false;
+  img = data.img;
+  timestamp = data.timestamp;
+  return !img.empty();
+}
+
 void MindVision::open()
 {
   CameraSdkInit(1);

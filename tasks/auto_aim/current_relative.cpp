@@ -209,7 +209,9 @@ CurrentRelativeEstimator::CurrentRelativeEstimator(const std::string & config_pa
   auto yaml = tools::load(config_path);
 
   // ---- 参考系 ----
-  const auto reference_text = tools::optional_string(yaml, "relative_reference", "camera_optical");
+  const auto reference_text = tools::optional_string(
+    yaml, "relative_output_frame",
+    tools::optional_string(yaml, "relative_reference", "camera_optical"));
   if (!parse_relative_reference(reference_text, geometry_.reference)) {
     throw std::runtime_error(
       "relative_reference 取值非法：'" + reference_text +
@@ -288,6 +290,9 @@ CurrentRelativeEstimator::CurrentRelativeEstimator(const std::string & config_pa
   // 显式开关优先于「有没有写 enemy_color」
   filter_.filter_color = tools::optional_bool(yaml, "relative_filter_color", filter_.filter_color);
 
+  // TX 整形开关：默认 false（TX = 符号 × (raw + 偏置) → 量化，不引入 gain/死区/限幅）
+  filter_.shape_tx = tools::optional_bool(yaml, "relative_tx_shape", false);
+
   // 与跟踪路径共用同一份 servo_* 读取，两条路的 gain/deadband/limit 不会各说各话
   limits_ = load_servo_limits(config_path);
 }
@@ -322,18 +327,28 @@ std::string CurrentRelativeEstimator::describe() const
 
 RelativeObservation CurrentRelativeEstimator::observe(
   const std::list<Armor> & armors, const cv::Size & image_size,
-  std::chrono::steady_clock::time_point frame_time, std::chrono::steady_clock::time_point now) const
+  std::chrono::steady_clock::time_point frame_time, std::chrono::steady_clock::time_point now,
+  const RelativeFilter * filter_override) const
 {
   RelativeObservation obs;
+  const RelativeFilter & filter = filter_override ? *filter_override : filter_;
 
-  // ---- 1) 过滤 + 确定性选目标（只用**这一帧**的信息）----
+  // ---- 1) 过滤 + 收集候选（只用**这一帧**的信息）----
   const Armor * selected = nullptr;
   double selected_distance = 0.0;
   int candidates = 0;
   Rejections rejected;
 
+  struct Candidate
+  {
+    const Armor * armor;
+    double distance;
+  };
+  std::vector<Candidate> ordered;
+  ordered.reserve(armors.size());
+
   for (const auto & armor : armors) {
-    if (filter_.filter_color && armor.color != filter_.enemy_color) {
+    if (filter.filter_color && armor.color != filter.enemy_color) {
       ++rejected.color;
       continue;
     }
@@ -356,13 +371,14 @@ RelativeObservation CurrentRelativeEstimator::observe(
       ++rejected.out_of_image;
       continue;
     }
-    if (armor.confidence < filter_.min_confidence) {
+    if (armor.confidence < filter.min_confidence) {
       ++rejected.confidence;
       continue;
     }
 
     ++candidates;
     const double distance = std::hypot(armor.center_norm.x - 0.5f, armor.center_norm.y - 0.5f);
+    ordered.push_back({&armor, distance});
     if (selected == nullptr || better_candidate(armor, distance, *selected, selected_distance)) {
       selected = &armor;
       selected_distance = distance;
@@ -378,35 +394,67 @@ RelativeObservation CurrentRelativeEstimator::observe(
   // 用 '/' 而不是 ','：这个字符串要进逐帧 CSV，字段里不能带逗号（避免再做转义）
   obs.target_id = target_id(*selected);
 
+  // 按「离画面中心最近」排序（完全同距时用 better_candidate 兜底，保证确定性）
+  std::sort(ordered.begin(), ordered.end(), [](const Candidate & a, const Candidate & b) {
+    if (a.distance != b.distance) return a.distance < b.distance;
+    return better_candidate(*a.armor, a.distance, *b.armor, b.distance);
+  });
+
   // ---- 2) 时效：过期帧不能当有效观测（控制权交回电控）----
   const double age_ms = tools::delta_time(now, frame_time) * 1000.0;
-  if (age_ms > filter_.max_frame_age_ms) {
+  if (age_ms > filter.max_frame_age_ms) {
     obs.reason = "stale_frame";
     return obs;
   }
 
-  // ---- 3) 几何解算（只用选中这一块的角点，不碰其它装甲板未初始化的 xyz_*）----
-  std::string reason;
-  if (!solve_current_angles(
-        geometry_, selected->type, selected->points, obs.xyz, obs.raw_yaw, obs.raw_pitch,
-        obs.reprojection, reason)) {
+  // ---- 3) 几何解算：最近的解不出来就退到下一块 ----
+  // 单帧观测没有跟踪器帮忙，一块装甲板角点退化时不该让整帧变成 control=0：
+  // 按离画面中心的顺序尝试，最多试 kMaxGeometryAttempts 块（成本上限 = 常数次 PnP）。
+  std::string reason = "no_target";
+  bool solved = false;
+  for (std::size_t i = 0; i < ordered.size() && i < kMaxGeometryAttempts; ++i) {
+    const Armor & armor = *ordered[i].armor;
+    if (solve_current_angles(
+          geometry_, armor.type, armor.points, obs.xyz, obs.raw_yaw, obs.raw_pitch,
+          obs.reprojection, reason)) {
+      obs.target_id = target_id(armor);
+      solved = true;
+      break;
+    }
+  }
+  if (!solved) {
     obs.reason = reason;
     return obs;
   }
 
-  // ---- 4) 整形（与跟踪路径同一个函数）+ 量化（与 CAN 编码同一个函数）----
-  // 偏置/死区/限幅的作用点与 VisualServo::shape 一致：先加偏置 → 判死区 → 限幅 → 乘 gain*sign。
-  // 这里只是额外把「发生了什么」记下来，供 CSV / HUD 观测。
+  // ---- 4) TX：默认 raw → 符号/偏置 → 量化，**不经过** VisualServo::shape() ----
+  // 为什么分开：gain / 死区 / max_step 是「执行侧该怎么动」的整形，而 current 路径
+  // 的输出语义是「这一帧测到的角差」。观测本身被这些参数改过以后，CSV / HUD 上的 TX
+  // 就不再是测量值，现场无法区分「测错了」还是「整形改过头了」。
+  // 需要旧行为（gain/死区/20° 限幅）时把 relative_tx_shape 置 true。
   const double biased_yaw = obs.raw_yaw + limits_.yaw_offset;
   const double biased_pitch = obs.raw_pitch + limits_.pitch_offset;
-  obs.deadband =
-    std::abs(biased_yaw) < limits_.deadband || std::abs(biased_pitch) < limits_.deadband;
-  obs.clamped =
-    std::abs(biased_yaw) > limits_.max_step || std::abs(biased_pitch) > limits_.max_step;
 
-  const auto command = VisualServo::shape(limits_, obs.raw_yaw, obs.raw_pitch);
-  const int16_t yaw_1e4 = io::quantize_angle_1e4(command.yaw);
-  const int16_t pitch_1e4 = io::quantize_angle_1e4(command.pitch);
+  io::Command command{false, false, 0.0, 0.0};
+  double tx_yaw = 0.0;
+  double tx_pitch = 0.0;
+  if (filter.shape_tx) {
+    command = VisualServo::shape(limits_, obs.raw_yaw, obs.raw_pitch);
+    obs.deadband =
+      std::abs(biased_yaw) < limits_.deadband || std::abs(biased_pitch) < limits_.deadband;
+    obs.clamped =
+      std::abs(biased_yaw) > limits_.max_step || std::abs(biased_pitch) > limits_.max_step;
+    tx_yaw = command.yaw;
+    tx_pitch = command.pitch;
+  } else {
+    // 只做符号（镜像安装）与静态偏置，不做增益/死区/限幅
+    tx_yaw = limits_.yaw_sign * biased_yaw;
+    tx_pitch = limits_.pitch_sign * biased_pitch;
+  }
+
+  // 量化与 CAN 编码共用同一个函数，保证 CSV 里的 TX 与总线字节逐位一致
+  const int16_t yaw_1e4 = io::quantize_angle_1e4(tx_yaw);
+  const int16_t pitch_1e4 = io::quantize_angle_1e4(tx_pitch);
   obs.tx_yaw = static_cast<double>(yaw_1e4) / 1e4;
   obs.tx_pitch = static_cast<double>(pitch_1e4) / 1e4;
   obs.saturated =

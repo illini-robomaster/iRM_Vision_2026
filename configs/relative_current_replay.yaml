@@ -45,6 +45,8 @@ enemy_color: "blue"
 
 #####-----相对角差（当前帧观测）-----#####
 relative_reference: "camera_optical"   # (camera_optical) | gimbal
+relative_output_frame: "camera_optical"
+relative_tx_shape: false
 relative_max_frame_age_ms: 120         # (120) 回放时年龄 ≈ 单帧检测耗时
 relative_send_interval_ms: 0           # (0) 0 = 每帧都发
 relative_min_confidence: 0.8
@@ -69,3 +71,11 @@ can_interface: "can0"
 can_command_mode: "relative"
 cboard_wait_imu: false
 relative_canid: 0xFE
+vision_protocol: "v1"
+vision_handshake_request_canid: 0x310
+vision_handshake_response_canid: 0x311
+vision_control_canid: 0x312
+vision_can_ids_confirmed: false         # 本配置仅供 dry-run；vcan 用独立配置
+vision_control_timeout_ms: 500
+relative_frame_timeout_ms: 120
+relative_tx_rate_hz: 0

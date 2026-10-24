@@ -51,7 +51,16 @@ struct RelativeFilter
   Color enemy_color = Color::blue;
   double min_confidence = 0.0;
   double max_frame_age_ms = 120.0;  // 观测过期阈值（超过就不发有效值）
+
+  // TX 整形开关（新增，默认 false）：
+  //   false：TX = 符号 × (raw + 静态偏置) → 量化。gain/死区/max_step 一律不参与，
+  //          这样 CSV/HUD 上的 TX 就是「这一帧测到的角差」，不再被执行侧整形污染；
+  //   true ：走 VisualServo::shape()（旧行为：gain、死区、单帧 20° 限幅）。
+  bool shape_tx = false;
 };
+
+// 几何解算最多尝试多少块候选（最近的解不出来就退到下一块）
+constexpr std::size_t kMaxGeometryAttempts = 8;
 
 // 单帧观测结果：raw（几何解算）与 TX（整形 + 量化后真正上总线的值）分离。
 // 有效帧：valid=true、command.control=true、command.shoot 恒为 false；
@@ -108,10 +117,11 @@ public:
   // armors    ：detector.detect() 的**原始**结果（本帧）
   // image_size：本帧图像尺寸，用于「角点必须落在当前帧内」的检查
   // frame_time：该帧时间戳；now：调用时刻（两者之差 = 观测年龄）
+  // filter    ：可选覆盖（板端 CONTROL 下发的动态颜色用；nullptr = 用构造时那份）
   RelativeObservation observe(
     const std::list<Armor> & armors, const cv::Size & image_size,
-    std::chrono::steady_clock::time_point frame_time,
-    std::chrono::steady_clock::time_point now) const;
+    std::chrono::steady_clock::time_point frame_time, std::chrono::steady_clock::time_point now,
+    const RelativeFilter * filter = nullptr) const;
 
   const RelativeGeometry & geometry() const { return geometry_; }
   const ServoLimits & limits() const { return limits_; }

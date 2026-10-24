@@ -51,6 +51,17 @@ void HikRobot::read(cv::Mat & img, std::chrono::steady_clock::time_point & times
   timestamp = data.timestamp;
 }
 
+bool HikRobot::read_for(
+  cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
+  std::chrono::milliseconds timeout)
+{
+  CameraData data;
+  if (!queue_.pop_for(data, timeout)) return false;
+  img = data.img;
+  timestamp = data.timestamp;
+  return !img.empty();
+}
+
 void HikRobot::capture_start()
 {
   capturing_ = false;

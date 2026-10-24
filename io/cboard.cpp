@@ -1,5 +1,7 @@
 #include "cboard.hpp"
 
+#include <mutex>
+
 #include "tools/math_tools.hpp"
 #include "tools/yaml.hpp"
 
@@ -27,15 +29,14 @@ CBoard::CBoard(const std::string & config_path)
     data_behind_.timestamp = std::chrono::steady_clock::time_point{};
   }
 
-  if (command_mode_ == CommandMode::relative) {
-    tools::logger()->info(
-      "[Cboard] 相对角差模式：0x{:X} 上发 Δyaw/Δpitch（int16 BE ×1e4 rad）", relative_canid_);
-  }
-
+  // 相对角差模式的 ID 校验与生效值日志在 read_yaml() 里（构造 can_ 之前完成，
+  // 配置写错时不会先把 SocketCAN 拉起来）
   tools::logger()->info("[Cboard] Opened.");
 }
 
 bool CBoard::relative() const { return command_mode_ == CommandMode::relative; }
+
+int CBoard::relative_canid() const { return relative_canid_; }
 
 Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
@@ -66,24 +67,40 @@ Eigen::Quaterniond CBoard::imu_at(std::chrono::steady_clock::time_point timestam
 
 namespace
 {
-// 角度 → int16（单位 1e-4 rad），饱和而不是回绕：超范围时按 ±3.2767 rad 截断，
-// 避免 int16 溢出把「往右转」变成「往左转」。
-int16_t encode_angle_1e4(double rad)
+// 发送失败日志限流：30Hz 下每帧都失败会把日志刷爆（spdlog 还是 flush_on(info)），
+// 1Hz 一条 + 累计计数足够定位问题，又不会反过来拖慢控制循环。
+bool should_log_failure()
 {
-  const double scaled = rad * 1e4;
-  if (scaled >= 32767.0) return 32767;
-  if (scaled <= -32768.0) return -32768;
-  return static_cast<int16_t>(std::lround(scaled));
+  static std::mutex mtx;
+  static auto last = std::chrono::steady_clock::time_point{};
+  static int suppressed = 0;
+  std::lock_guard<std::mutex> lock(mtx);
+  auto now = std::chrono::steady_clock::now();
+  if (tools::delta_time(now, last) >= 1.0) {
+    if (suppressed > 0)
+      tools::logger()->debug("[Cboard] 最近 1s 内还有 {} 次发送失败未逐条打印", suppressed);
+    last = now;
+    suppressed = 0;
+    return true;
+  }
+  ++suppressed;
+  return false;
 }
 }  // namespace
 
 void encode_relative_command(const Command & command, uint8_t data[8])
 {
-  data[0] = static_cast<uint8_t>((command.control ? 0x01 : 0x00) | (command.shoot ? 0x02 : 0x00));
+  // 非有限角度 = 无效观测：control 清零、角差写 0（见 cboard.hpp 的说明）
+  const bool finite = std::isfinite(command.yaw) && std::isfinite(command.pitch);
+  const bool control = command.control && finite;
+  // control=0 时不带射（shoot 也清零）：帧里不保留任何"有效的旧值"
+  const bool shoot = control && command.shoot;
+
+  data[0] = static_cast<uint8_t>((control ? 0x01 : 0x00) | (shoot ? 0x02 : 0x00));
   data[1] = 0;
 
-  const int16_t dyaw = encode_angle_1e4(command.yaw);
-  const int16_t dpitch = encode_angle_1e4(command.pitch);
+  const int16_t dyaw = control ? io::quantize_angle_1e4(command.yaw) : 0;
+  const int16_t dpitch = control ? io::quantize_angle_1e4(command.pitch) : 0;
   data[2] = static_cast<uint8_t>((dyaw >> 8) & 0xFF);
   data[3] = static_cast<uint8_t>(dyaw & 0xFF);
   data[4] = static_cast<uint8_t>((dpitch >> 8) & 0xFF);
@@ -92,22 +109,23 @@ void encode_relative_command(const Command & command, uint8_t data[8])
   data[7] = 0;
 }
 
-void CBoard::send(Command command) const
+bool CBoard::send(Command command) const
 {
   can_frame frame;
   frame.can_dlc = 8;
 
   // 相对角差模式：只发 Δyaw/Δpitch，不发绝对角（见 documentation/relative_can_protocol.md）
   if (command_mode_ == CommandMode::relative) {
-    frame.can_id = relative_canid_;
+    frame.can_id = static_cast<canid_t>(relative_canid_);
     encode_relative_command(command, frame.data);
 
     try {
       can_.write(&frame);
+      return true;
     } catch (const std::exception & e) {
-      tools::logger()->warn("{}", e.what());
+      if (should_log_failure()) tools::logger()->warn("[Cboard] 相对角差帧发送失败：{}", e.what());
+      return false;
     }
-    return;
   }
 
   frame.can_id = send_canid_;
@@ -122,8 +140,10 @@ void CBoard::send(Command command) const
 
   try {
     can_.write(&frame);
+    return true;
   } catch (const std::exception & e) {
-    tools::logger()->warn("{}", e.what());
+    if (should_log_failure()) tools::logger()->warn("[Cboard] 绝对角帧发送失败：{}", e.what());
+    return false;
   }
 }
 
@@ -186,6 +206,28 @@ std::string CBoard::read_yaml(const std::string & config_path)
 
   relative_canid_ = yaml["relative_canid"] ? yaml["relative_canid"].as<int>() : 0xFE;
   wait_imu_ = tools::optional_bool(yaml, "cboard_wait_imu", true);
+
+  // 相对角差帧的 ID 校验（只校验标准帧 11 位范围）：写错成 0x800+ 会变成扩展帧标志位，
+  // 或者与四元数/弹速/绝对角命令撞车 —— 两者都会让电控侧解析出错，启动时就拒绝。
+  if (command_mode_ == CommandMode::relative) {
+    if (relative_canid_ <= 0 || relative_canid_ > 0x7FF) {
+      throw std::runtime_error(
+        "relative_canid 必须在 1..0x7FF（标准帧 11 位）之间，当前值 = " +
+        std::to_string(relative_canid_));
+    }
+    if (
+      relative_canid_ == quaternion_canid_ || relative_canid_ == bullet_speed_canid_ ||
+      relative_canid_ == send_canid_) {
+      throw std::runtime_error(
+        "relative_canid 与 quaternion_canid / bullet_speed_canid / send_canid 冲突（当前 " +
+        std::to_string(relative_canid_) + "），换一个未占用的 ID");
+    }
+
+    tools::logger()->info(
+      "[Cboard] 相对角差模式：0x{:X} 上发 Δyaw/Δpitch（int16 BE ×1e4 rad），"
+      "control=0 时角差与 shoot 一律写 0",
+      relative_canid_);
+  }
 
   if (!yaml["can_interface"]) {
     throw std::runtime_error("Missing 'can_interface' in YAML configuration.");

@@ -6,11 +6,34 @@
 
 ## 0. 下次开工第一件事（TL;DR）
 
-把**相对角差（Δyaw / Δpitch）显示到 `detect_freq_visual_test` 的本地直播页面**上
-（`tools::MjpegServer` 那个 `-stream=<port>` 页面）。实现方案已设计好，见本文 §4，
-照抄即可；这一步同时能证明「检测 → PnP → 角差」数学链路是对的（不依赖 tracker 锁定）。
+> **2026-10-24 更新**：下面这段原始计划已经做完（角差 HUD + 逐帧 CSV 落在
+> `src/relative_aim.cpp`，不再改 `detect_freq_visual_test`）。当前状态与实测数据见
+> §0.1 和 `documentation/relative_acceptance.md`。
 
-做完再处理 §5 的已知问题，最后按 §8 提交。
+~~把相对角差（Δyaw / Δpitch）显示到 `detect_freq_visual_test` 的本地直播页面上~~
+已完成，改为在**专用入口**里做（复用 `tools::MjpegServer`）：
+
+```bash
+./build/relative_aim -c=configs/relative_current.yaml -stream=8080        # HUD 直播
+./build/relative_aim -c=configs/relative_current.yaml -csv=/tmp/r.csv     # 逐帧 CSV
+```
+
+### 0.1 2026-10-24 的实际进展（比 §1 的表新）
+
+| 项 | 状态 |
+| --- | --- |
+| 新增 `tasks/auto_aim/current_relative.{hpp,cpp}`：当前帧观测（过滤 → 确定性选目标 → PnP → 参考系 → 时效 → 量化） | ✅ 已实现，`relative_servo_test` 覆盖 |
+| `src/relative_aim.cpp`：`-source=current/tracker`、`-csv`、`-stream`、`-d`、退出补发 `control=0` | ✅ 已实现 |
+| `relative_reference`：`camera_optical`（默认，无需外参）/ `gimbal`（必须外参，缺键报错） | ✅ 已实现 |
+| `CBoard::send()` 返回 bool；`encode_relative_command()` 对 NaN/Inf/control=0 强制清零 | ✅ 已实现 |
+| `SocketCAN::write()` 整帧校验 + errno；`close()` 后 fd 复位；EINTR/EAGAIN 处理 | ✅ 已实现 |
+| `configs/relative_current.yaml`（真机）/ `configs/relative_current_replay.yaml`（回放验收） | ✅ 已加 |
+| 离线自检 | ✅ **54 checks, 0 failures** |
+| 回放 dry-run | ✅ 150 帧 / 有效 124（82.7%）/ 检测 23.3 ms/帧 |
+| vcan 字节级验收 | ✅ 121 帧全 `0FE [8]`，99 个 `control=1` 与 CSV 逐帧一致（0 处不一致） |
+| 新 USB3.0 线取流 | ✅ 1280×1024 **120.5 fps**（3×60s，p95 ≤8.5ms，丢帧 0/0/1） |
+| 旧线 A/B、真 CBoard、云台闭环、开火 | ❌ 未验证（硬件/线材不在手，清单见验收文档 §7） |
+
 
 ## 1. 当前状态
 
@@ -24,8 +47,8 @@
 | `tests/relative_servo_test.cpp`（纯函数 + 编码 + 流水线自测） | ✅ **22 checks, 0 failures** |
 | `configs/standard4.yaml` 新增可选键（`can_command_mode` / `relative_canid` / `cboard_wait_imu` / `servo_*`） | ✅ 已加 |
 | `documentation/relative_can_protocol.md`（协议 / 固件参考实现 / 配置表 / 联调步骤） | ✅ 已写 |
-| 端到端 dry-run（离线 demo 回放跑出非零角差） | ⚠️ **只验证到「角差数值正确」，没拿到 `control=1` 的命令**——被 §5 的 tracker 问题挡住 |
-| 直播页面显示相对角差 | ❌ 未做（下次第一件事，§4） |
+| 端到端 dry-run（离线 demo 回放跑出非零角差） | ✅ **2026-10-24 解决**：`-source=current` 用本帧检出做 PnP，不依赖 tracker；150 帧里 124 帧有效（见验收文档 §4.2） |
+| 直播页面显示相对角差 | ✅ 2026-10-24 完成：`./build/relative_aim ... -stream=8080`（HUD 里 raw/tx 两行 + 选中目标绿框） |
 | 固件侧（电控）按增量执行的 handler | ❌ 未做（参考实现在协议文档里） |
 | git 提交 | ✅ 已提交并推送 `44d15df`（`origin/main` 与本地 HEAD 一致）；仅 `.vscode/c_cpp_properties.json` 留在本地未提交（见 §2） |
 
@@ -339,6 +362,8 @@ sed 's/^min_confidence: 0.8/min_confidence: 0.6/; s/^min_detect_count: 5/min_det
 | 配置键读取 | `io/cboard.cpp:176-188`、`tasks/auto_aim/visual_servo.cpp:13-22` |
 | 单测 | `./build/relative_servo_test` |
 | 端到端 dry-run | `./build/relative_aim -c=<cfg> -dry-run -n=60` |
-| 直播页面 | `./build/detect_freq_visual_test -c=<cfg> -m=live -servo -stream=8080`（replay 下 `-n=0` 等于 300 帧） |
+| 直播页面 | `./build/relative_aim -c=configs/relative_current.yaml -stream=8080`（HUD 自带头） |
+| 逐帧 CSV | `./build/relative_aim -c=<cfg> -csv=/tmp/r.csv`（列定义见 `src/relative_aim.cpp`） |
+| 验收证据（线材/帧率/dry-run/vcan） | `documentation/relative_acceptance.md` |
 | 本机注意 | 短选项必须 `-c=`；`timeout -s INT`；`build/` 别删（`/home/irm/sp_vision_25` 是它的旧路径符号链接） |
 

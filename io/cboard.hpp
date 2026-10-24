@@ -51,6 +51,11 @@ enum class CommandMode
 //   data[2..3] = Δyaw   int16 大端，单位 1e-4 rad
 //   data[4..5] = Δpitch int16 大端，单位 1e-4 rad
 //   data[6..7] = 0（保留）
+//
+// 安全性（编码层强制，不依赖调用方）：
+//   - control=0 时角差与 shoot 一律写 0：不让「无目标」的旧角度值留在帧里被电控累加；
+//   - yaw/pitch 出现 NaN / Inf 时视为无效观测：control 清零、角差写 0；
+//   - 超范围饱和到 int16 边界（不回绕），见 io::quantize_angle_1e4()。
 void encode_relative_command(const Command & command, uint8_t data[8]);
 
 class CBoard
@@ -65,10 +70,17 @@ public:
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
 
-  void send(Command command) const;
+  // 返回值 = 这一帧是否**完整写进了 SocketCAN**。
+  // 旧调用方忽略返回值即可（签名从 void 改成 bool 不影响已有代码），
+  // 但 relative_aim 这类需要「发送结果观测」的入口必须检查它：
+  // 打不开 CAN / 帧被拒绝 / 写了一半都不算发送成功。
+  bool send(Command command) const;
 
   // can_command_mode: "relative" → send() 按相对角差编码（见 encode_relative_command）
   bool relative() const;
+
+  // 相对角差帧的 CAN ID（can_command_mode: relative 时才有意义）
+  int relative_canid() const;
 
 private:
   struct IMUData

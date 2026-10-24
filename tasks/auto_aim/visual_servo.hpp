@@ -27,12 +27,22 @@ struct ServoLimits
 // ---------------------------------------------------------------------------
 // 与 Aimer 的区别：Aimer 输出「世界坐标系下的绝对角」，需要电机/云台姿态反馈；
 // VisualServo 只用 solver 算出的 armor.xyz_in_gimbal（目标在云台系下的坐标，
-// 与 IMU 四元数无关），得到「目标相对相机光轴」的 yaw/pitch 偏差，
+// 与 IMU 四元数无关），得到「目标相对**云台系参考轴**」的 yaw/pitch 偏差，
 // 由电控按增量执行 —— 图像上的偏差会逐帧收敛到 0，不需要编码器。
 //
 // 坐标系：云台系 F-L-U（x 前、y 左、z 上），与 Solver::solve() 一致
 //   Δyaw   = atan2(y, x)          （左转为正）
 //   Δpitch = -atan2(z, sqrt(x²+y²))（沿用 CBoard/Aimer 约定：向上为负）
+//
+// ⚠️ 这里的参考轴是**云台系**（相机光心到云台原点的平移 t_camera2gimbal 已包含在
+// xyz_in_gimbal 里）。「相对相机光轴」是另一套语义，见
+// auto_aim::RelativeReference::camera_optical（tasks/auto_aim/current_relative.hpp）：
+// 只有 t_camera2gimbal == 0 且 R_camera2gimbal 恰好把光轴对到云台 x 轴时两者才等价。
+//
+// 从 yaml 读 servo_* 键（缺键取默认值）。VisualServo 与 CurrentRelativeEstimator 共用，
+// 保证「跟踪路径」与「当前帧路径」的 gain/deadband/limit 语义完全一致。
+ServoLimits load_servo_limits(const std::string & config_path);
+
 class VisualServo
 {
 public:

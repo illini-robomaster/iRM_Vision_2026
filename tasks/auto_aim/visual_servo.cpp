@@ -8,19 +8,24 @@
 
 namespace auto_aim
 {
-VisualServo::VisualServo(const std::string & config_path)
+ServoLimits load_servo_limits(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
 
   // 全部是新增可选键：缺键时保持默认值，已有 configs/*.yaml 不用改
-  limits_.gain = tools::optional_double(yaml, "servo_gain", 1.0);
-  limits_.deadband = tools::optional_double(yaml, "servo_deadband_deg", 0.1) / 57.3;
-  limits_.max_step = tools::optional_double(yaml, "servo_max_step_deg", 20.0) / 57.3;
-  limits_.yaw_sign = tools::optional_double(yaml, "servo_yaw_sign", 1.0);
-  limits_.pitch_sign = tools::optional_double(yaml, "servo_pitch_sign", 1.0);
-  limits_.yaw_offset = tools::optional_double(yaml, "servo_yaw_offset_deg", 0.0) / 57.3;
-  limits_.pitch_offset = tools::optional_double(yaml, "servo_pitch_offset_deg", 0.0) / 57.3;
+  ServoLimits limits;
+  limits.gain = tools::optional_double(yaml, "servo_gain", 1.0);
+  limits.deadband = tools::optional_double(yaml, "servo_deadband_deg", 0.1) / 57.3;
+  limits.max_step = tools::optional_double(yaml, "servo_max_step_deg", 20.0) / 57.3;
+  limits.yaw_sign = tools::optional_double(yaml, "servo_yaw_sign", 1.0);
+  limits.pitch_sign = tools::optional_double(yaml, "servo_pitch_sign", 1.0);
+  limits.yaw_offset = tools::optional_double(yaml, "servo_yaw_offset_deg", 0.0) / 57.3;
+  limits.pitch_offset = tools::optional_double(yaml, "servo_pitch_offset_deg", 0.0) / 57.3;
+  return limits;
+}
 
+VisualServo::VisualServo(const std::string & config_path) : limits_(load_servo_limits(config_path))
+{
   tools::logger()->info(
     "[VisualServo] gain={:.2f} deadband={:.2f}deg max_step={:.2f}deg yaw_sign={:+.0f} "
     "pitch_sign={:+.0f}",

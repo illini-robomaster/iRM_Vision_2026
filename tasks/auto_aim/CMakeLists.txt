@@ -13,6 +13,7 @@ add_library(auto_aim OBJECT
     solver.cpp
     aimer.cpp
     visual_servo.cpp        # 相对角差（视觉伺服），只用 xyz_in_gimbal，不需要电机位姿
+    current_relative.cpp    # 当前帧相对角差（不依赖 Tracker：单帧选目标 + PnP + 角差）
     target.cpp
     tracker.cpp
     voter.cpp

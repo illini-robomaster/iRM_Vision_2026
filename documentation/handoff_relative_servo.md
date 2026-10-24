@@ -103,6 +103,20 @@ timeout -s INT 90 ./build/relative_aim -c=configs/offline.yaml -dry-run -n=60
 
 ## 4. 下次第一件事：把相对角差显示在直播页面上
 
+> ⚠️ **2026-10-24：本节已作废（保留作方案记录）。** 实际实现没有改
+> `tests/detect_freq_visual_test.cpp`，而是放在**专用入口** `src/relative_aim.cpp`：
+> 同一份代码既算角差又发 CAN，HUD / MJPEG / CSV 都在里面，`detect_freq_visual_test`
+> 保持「只测帧率与检测」的职责，`-dump` 的 CSV 表头也没动（`scripts/replay_ab.sh` 不受影响）。
+>
+> 现用命令：
+> ```bash
+> ./build/relative_aim -c=configs/relative_current.yaml -stream=8080   # HUD 直播
+> ./build/relative_aim -c=configs/relative_current.yaml -csv=/tmp/r.csv
+> ./build/relative_aim -c=configs/relative_current_replay.yaml -dry-run -n=150 -csv=/tmp/d.csv
+> ```
+> 下面 §4.1~§4.4 的设计要点（尤其 §4.3 的四条坑：`armors` 要拷贝、`use_enemy_color`、
+> `set_R_gimbal2world` 顺序、别动 `-dump` 表头）在 `relative_aim.cpp` 里同样适用。
+
 ### 4.1 目标画面（`detect_freq_visual_test` 的 HUD 增加 2 行）
 
 现有 HUD 已占 y = 30 / 60 / 90 / 120（`tests/detect_freq_visual_test.cpp:354-374`），
@@ -271,6 +285,11 @@ curl -s -o /tmp/snap.jpg http://127.0.0.1:8080/snapshot.jpg
 
 
 ## 5. 已知问题：离线 demo 回放时 tracker 锁不上（挡住 e2e 验证）
+
+> ✅ **2026-10-24：已绕过。** `-source=current` 不经过 Tracker，直接用本帧检出做 PnP，
+> 回放 demo 视频时首帧就能 `control=1`（150 帧里 124 帧有效）。本节的根因分析仍有效：
+> 想用 `-source=tracker` 那条路（EKF + 预测）就必须先解决 `use_enemy_color=true`
+> 把 demo 里的蓝甲板全过滤掉的问题，否则 tracker 恒 `lost`。
 
 **现象**（可复现）：
 

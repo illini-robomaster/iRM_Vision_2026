@@ -1,5 +1,6 @@
 #include "cboard.hpp"
 
+#include <algorithm>
 #include <mutex>
 
 #include "tools/math_tools.hpp"
@@ -174,11 +175,23 @@ bool CBoard::send_raw(uint32_t can_id, const uint8_t data[8]) const
   }
 }
 
-void CBoard::add_frame_handler(FrameHandler handler)
+CBoard::FrameHandlerId CBoard::add_frame_handler(FrameHandler handler)
 {
-  if (!handler) return;
+  if (!handler) return 0;
   std::lock_guard<std::mutex> lock(handlers_mutex_);
-  handlers_.push_back(std::move(handler));
+  const FrameHandlerId id = next_handler_id_++;
+  handlers_.push_back({id, std::move(handler)});
+  return id;
+}
+
+void CBoard::remove_frame_handler(FrameHandlerId handler_id)
+{
+  if (handler_id == 0) return;
+  std::lock_guard<std::mutex> lock(handlers_mutex_);
+  const auto it = std::find_if(
+    handlers_.begin(), handlers_.end(),
+    [handler_id](const HandlerEntry & entry) { return entry.id == handler_id; });
+  if (it != handlers_.end()) handlers_.erase(it);
 }
 
 void CBoard::callback(const can_frame & frame)
@@ -190,7 +203,7 @@ void CBoard::callback(const can_frame & frame)
   // 旧分支不认识 0x1xx 之外的 ID，顺序不影响已有行为。
   {
     std::lock_guard<std::mutex> lock(handlers_mutex_);
-    for (const auto & handler : handlers_) handler(frame.can_id, frame.data, frame.can_dlc);
+    for (const auto & entry : handlers_) entry.handler(frame.can_id, frame.data, frame.can_dlc);
   }
 
   // 协议观察者需要看畸形 DLC 以 fail-closed；旧遥测解析则不能读缺失字节。
@@ -278,7 +291,8 @@ std::string CBoard::read_yaml(const std::string & config_path)
     throw std::runtime_error("Missing 'can_interface' in YAML configuration.");
   }
 
-  return yaml["can_interface"].as<std::string>();
+  can_interface_ = yaml["can_interface"].as<std::string>();
+  return can_interface_;
 }
 
 }  // namespace io

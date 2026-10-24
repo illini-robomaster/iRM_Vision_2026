@@ -166,6 +166,9 @@ target_link_libraries(gimbal_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tool
 add_executable(minipc_test tests/minipc_test.cpp)
 target_link_libraries(minipc_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
+add_executable(board_state_can_test tests/board_state_can_test.cpp)
+target_link_libraries(board_state_can_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+
 add_executable(planner_test tests/planner_test.cpp)
 target_link_libraries(planner_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 

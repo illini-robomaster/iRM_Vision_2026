@@ -1,0 +1,21 @@
+# Physical Type C CAN1 <-> Jetson can0 configuration for board_state_can_test.
+# IDs below were verified on this bus with motor traffic. Recheck the allocation
+# and set board_state_can_ids_confirmed appropriately before using another bus.
+# The legacy CBoard IMU wait is disabled because BoardStateCanLink owns the new
+# nonblocking IMU history; its imu_at()/state() API is the one under test.
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "can0"
+can_command_mode: "absolute"
+cboard_wait_imu: false
+
+# Disjoint from the legacy IDs above, separate vision-control IDs, and DJI
+# motor command/feedback traffic.
+board_state_can_control_canid: 0x320   # Jetson -> CBoard: START / final ACK
+board_state_can_response_canid: 0x321  # CBoard -> Jetson: ACK + color
+board_state_can_data_canid: 0x322      # CBoard -> Jetson: five state fragments
+board_state_can_retry_ms: 100.0
+board_state_can_fragment_timeout_ms: 50.0
+board_state_can_stream_timeout_ms: 500.0
+board_state_can_ids_confirmed: true

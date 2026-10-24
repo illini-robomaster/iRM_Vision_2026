@@ -11,6 +11,7 @@ add_library(io STATIC
     usbcamera/usbcamera.cpp  
     camera.cpp
     cboard.cpp
+    board_state_can.cpp  # Jetson 发起的 board_state 会话 + 五片重组 + 独立线程
     vision_cboard.cpp  # vision↔CBoard v1 协议（握手/会话/启停/颜色）+ 独立发送线程
     dm_imu/dm_imu.cpp
     gimbal/gimbal.cpp

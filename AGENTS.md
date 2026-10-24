@@ -259,10 +259,10 @@ bash scripts/setup_x86_dev.sh -y     # 装 apt 依赖 + 生成 .vscode/eigen_fix
 
 ### 8.3 当前可移植目标子集
 - 库：`serial`、`tools`、`io`、`auto_aim`、`tinympcstatic`、`omniperception`
-- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（§8.7）、`camera_detect_test`、`detector_video_test`、`uav_debug`
+- 可执行：`planner_test`、`planner_test_offline`、`camera_test`、`usbcamera_test`、`multi_usbcamera_test`、`cboard_test`、`minipc_test`、`board_state_can_test`、`dm_test`、`fire_test`、`gimbal_test`、`gimbal_response_test`、`handeye_test`、`capture`、`split_video`、`calibrate_camera`、`calibrate_handeye`、`calibrate_robotworld_handeye`、`detect_freq_visual_test`（§8.7）、`camera_detect_test`、`detector_video_test`、`uav_debug`
 - 端到端检测目标（`auto_aim_test`、`camera_thread_test`、`usbcamera_detect_test`、`minimum_vision_system`）能编译链接，**运行到检测时**需要可用后端（ORT 就位即真正跑，见 §8.5）。
 - 仍然无法编译的只剩 `auto_buff` / `auto_buff_test` / `auto_buff_debug_mpc` / `uav`（未迁移的 `auto_buff/yolo11_buff.hpp`）：见 §6.1。`classifier` / `detector` 在本轮（v1.2）已迁移完成——`camera_detect_test`、`detector_video_test`、`uav_debug` 从“编译失败”转为可编译。
-- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述 26 个目标（含新增的 `camera_detect_test` / `detector_video_test` / `uav_debug`），并冒烟运行 `planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）、`camera_test -c=configs/offline.yaml`、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`。
+- CI：`.github/workflows/build-x86.yml` 在 ubuntu-22.04 上编译上述 28 个目标（含 `minipc_test` / `board_state_can_test`），并冒烟运行这两个协议测试、`planner_test_offline configs/demo.yaml`（注意 `fire_thresh` 等键只有 `configs/demo.yaml` / `standard3.yaml` / `standard4.yaml` 有，其余 config 会因缺键 `exit(1)`）、`camera_test -c=configs/offline.yaml`、`dm_test -p=none`、`detect_freq_visual_test -m=bench -n=30 -no-yolo`。
 
 ### 8.4 离线回放（已实现，x86_64 / WSL2 可用）
 

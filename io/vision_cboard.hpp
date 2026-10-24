@@ -298,6 +298,7 @@ private:
   void run();
 
   CBoard & board_;
+  uint64_t handler_id_ = 0;  // CBoard::FrameHandlerId; CBoard is forward-declared here.
   VisionLinkCore core_;
   struct ReceivedFrame
   {

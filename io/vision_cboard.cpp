@@ -699,11 +699,7 @@ VisionCboardLink::VisionCboardLink(const VisionProtocolConfig & config, CBoard &
 {
 }
 
-VisionCboardLink::~VisionCboardLink()
-{
-  board_.clear_frame_handlers();
-  stop();
-}
+VisionCboardLink::~VisionCboardLink() { stop(); }
 
 void VisionCboardLink::on_frame(uint32_t can_id, const uint8_t * data, uint8_t dlc)
 {
@@ -724,7 +720,17 @@ void VisionCboardLink::start()
   if (running_) return;
   quit_ = false;
   running_ = true;
-  thread_ = std::thread([this] { run(); });
+  try {
+    handler_id_ = board_.add_frame_handler(
+      [this](uint32_t can_id, const uint8_t * data, uint8_t dlc) { on_frame(can_id, data, dlc); });
+    if (handler_id_ == 0) throw std::runtime_error("failed to subscribe to CBoard frames");
+    thread_ = std::thread([this] { run(); });
+  } catch (...) {
+    if (handler_id_ != 0) board_.remove_frame_handler(handler_id_);
+    handler_id_ = 0;
+    running_ = false;
+    throw;
+  }
   tools::logger()->info("[VisionLink] 发送线程已启动（5ms tick，与取流/检测解耦）");
 }
 
@@ -733,6 +739,13 @@ void VisionCboardLink::stop()
   if (!running_) return;
   quit_ = true;
   if (thread_.joinable()) thread_.join();
+  if (handler_id_ != 0) board_.remove_frame_handler(handler_id_);
+  handler_id_ = 0;
+  {
+    std::lock_guard<std::mutex> lock(receive_mutex_);
+    received_.clear();
+    receive_overflow_ = false;
+  }
   running_ = false;
 }
 
@@ -741,22 +754,24 @@ void VisionCboardLink::run()
   using namespace std::chrono_literals;
 
   while (!quit_) {
-    // 接收队列与发送资格检查串行化：入队成功的停止不会被旧有效帧越过。
+    // 只在交换队列时持有 receive_mutex_。send_raw() 可能等 20ms，不能在
+    // 此期间挡住共享 SocketCAN 上的 board-state 遥测回调。发送期间新到的
+    // CONTROL 下一轮生效，等效于资格检查完成后才到达；core_ 内停止仍优先。
+    std::deque<ReceivedFrame> pending;
+    bool overflow = false;
     {
       std::lock_guard<std::mutex> lock(receive_mutex_);
-      if (receive_overflow_) {
-        core_.on_frame(core_.config().control_canid, nullptr, 0, Clock::now());
-        received_.clear();
-        receive_overflow_ = false;
-      }
-      for (const auto & frame : received_) {
-        core_.on_frame(frame.id, frame.data.data(), frame.dlc, frame.time);
-      }
-      received_.clear();
-      core_.transmit(Clock::now(), [this](uint32_t id, const uint8_t * bytes) {
-        return board_.send_raw(id, bytes);
-      });
+      overflow = receive_overflow_;
+      receive_overflow_ = false;
+      pending.swap(received_);
     }
+    if (overflow) core_.on_frame(core_.config().control_canid, nullptr, 0, Clock::now());
+    for (const auto & frame : pending) {
+      core_.on_frame(frame.id, frame.data.data(), frame.dlc, frame.time);
+    }
+    core_.transmit(Clock::now(), [this](uint32_t id, const uint8_t * bytes) {
+      return board_.send_raw(id, bytes);
+    });
 
     std::this_thread::sleep_for(5ms);
   }

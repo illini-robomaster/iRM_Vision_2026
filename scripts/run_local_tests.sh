@@ -9,9 +9,11 @@
 #   5) detect_freq_visual_test  检测链路的阶段性耗时 / 频率（cap/pre/detect/draw，bench 模式不需显示）
 #   6) detect_freq_visual_test  传统方法二次矫正（use_traditional=true，Detector+Classifier）走通
 #   7) replay_ab.sh             同录像 A/B 一致性基线（ORT vs cv::dnn，检测结果逐帧对比）
+#   8) board_state_can_test    CAN 握手 / 分片重组 / 丢失恢复（纯离线）
+#   9) minipc_test             UART 帧 / CRC / board_state（纯离线）
 #
 # 用法：
-#   bash scripts/run_local_tests.sh          # 跑全部 7 个用例
+#   bash scripts/run_local_tests.sh          # 跑全部 9 个用例
 #   bash scripts/run_local_tests.sh 2 4      # 只跑第 2、4 个用例
 #   LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 #
@@ -221,6 +223,12 @@ else
     fi
   fi
 fi
+
+run_case 8 "board_state_can_test：CAN 握手与分片重组（纯离线）" 15 'all checks passed' \
+  ./build/board_state_can_test ./build/board_state_can_test
+
+run_case 9 "minipc_test：UART 帧与 CRC（纯离线）" 15 'all checks passed' \
+  ./build/minipc_test ./build/minipc_test
 
 # ---------------------------------------------------------------- 汇总
 

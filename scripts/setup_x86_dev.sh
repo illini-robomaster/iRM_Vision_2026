@@ -69,6 +69,7 @@ make -C build -j"$(nproc)" \
   serial tools io auto_aim tinympcstatic omniperception \
   planner_test planner_test_offline \
   camera_test usbcamera_test multi_usbcamera_test cboard_test dm_test \
+  minipc_test board_state_can_test \
   fire_test gimbal_test gimbal_response_test handeye_test \
   capture split_video \
   calibrate_camera calibrate_handeye calibrate_robotworld_handeye \

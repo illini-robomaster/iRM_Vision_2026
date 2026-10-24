@@ -38,11 +38,30 @@ jobs:
             serial tools io auto_aim tinympcstatic omniperception \
             planner_test planner_test_offline \
             camera_test usbcamera_test multi_usbcamera_test cboard_test dm_test \
+            minipc_test board_state_can_test \
             fire_test gimbal_test gimbal_response_test handeye_test \
             capture split_video \
             calibrate_camera calibrate_handeye calibrate_robotworld_handeye \
             detect_freq_visual_test \
             camera_detect_test detector_video_test uav_debug
+
+      - name: Smoke test (UART and board-state CAN protocols)
+        run: |
+          ./build/minipc_test
+          ./build/board_state_can_test
+
+      - name: Smoke test (board-state CAN over vcan)
+        run: |
+          sudo modprobe vcan
+          sudo ip link add dev vcan42 type vcan 2>/dev/null || true
+          sudo ip link set up vcan42
+          python3 scripts/board_state_can_sim.py --interface vcan42 --seconds 8 &
+          sim_pid=$!
+          trap 'kill "$sim_pid" 2>/dev/null || true' EXIT
+          sleep 0.2
+          ./build/board_state_can_test -c=configs/board_state_can_vcan.yaml
+          wait "$sim_pid"
+          trap - EXIT
 
       - name: Smoke test (planner_test_offline replay)
         run: |

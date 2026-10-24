@@ -1,0 +1,16 @@
+# vcan-only integration config for scripts/board_state_can_sim.py.
+# The interface must remain a verified vcan device. For a physical bus, copy
+# configs/board_state_can.yaml and confirm its IDs before enabling confirmation.
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "vcan42"
+can_command_mode: "absolute"
+cboard_wait_imu: false
+board_state_can_control_canid: 0x320
+board_state_can_response_canid: 0x321
+board_state_can_data_canid: 0x322
+board_state_can_retry_ms: 100.0
+board_state_can_fragment_timeout_ms: 50.0
+board_state_can_stream_timeout_ms: 500.0
+board_state_can_ids_confirmed: true

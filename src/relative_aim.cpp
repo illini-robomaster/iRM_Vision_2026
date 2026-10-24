@@ -279,12 +279,9 @@ try {
       return 1;
     }
 
-    // 链路：状态机 + 独立发送线程。注册回调 → 起线程（顺序无所谓，回调只解析上行帧）
+    // 链路：状态机 + 独立发送线程。start() 注册自己的回调，析构时只注销
+    // 自己，允许 board-state 遥测共享同一个 CBoard/SocketCAN。
     link = std::make_unique<io::VisionCboardLink>(protocol, *cboard);
-    cboard->add_frame_handler(
-      [raw = link.get()](uint32_t can_id, const uint8_t * data, uint8_t dlc) {
-        raw->on_frame(can_id, data, dlc);
-      });
     link->start();
   }
 

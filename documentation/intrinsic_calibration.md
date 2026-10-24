@@ -59,11 +59,11 @@ pipeline settings from the actual camera configuration.
 2. Confirm the actual resolution and camera settings. Keep resolution, ROI,
    focus, and lens configuration fixed throughout acquisition and later use.
 3. Move the board across the image, including the edges, and vary distance and
-   tilt. Let the board settle before clicking **采集当前帧**.
+   tilt. Let the board settle before using **Capture current frame** (the UI label may be localized).
 4. Capture 15–25 diverse sharp views. The application permits solving from 5
    views, but that is only an input minimum, not a quality guarantee. Duplicate
    views are not automatically rejected. Position coverage is only a heuristic.
-5. Click **开始标定**. Computation runs in a background job; sample mutation is
+5. Use **Start calibration**. Computation runs in a background job; sample mutation is
    locked while solving. The model matches the existing program's `CALIB_FIX_K3`.
 6. Inspect RMS, mean Euclidean point error, and per-view errors. Delete unsuitable
    samples and solve again. Try the undistortion preview; no automatic accuracy
@@ -114,7 +114,7 @@ result and removes `intrinsics.yaml`, so stale results cannot be downloaded.
 Samples already saved on disk are not automatically reloaded on restart.
 Use `-i=<directory>` to review/import images into a new session; filenames are
 sorted lexicographically (zero-pad numeric names). This mode opens no camera.
-Click **下一张离线图片** to advance, then capture valid views manually.
+Use **Next offline image** to advance, then capture valid views manually.
 
 The output YAML includes `camera_matrix`, `distort_coeffs`, `image_width`,
 `image_height`, `rms_px`, `mean_error_px`, `per_view_mean_px`, and

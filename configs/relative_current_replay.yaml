@@ -1,31 +1,31 @@
 # =============================================================================
-# 相对角差（当前帧观测）—— 离线回放配置（无相机 / 无电控也能跑）
+# Current-frame relative angles: offline replay (no camera or firmware required for dry-run)
 #
-# 与 configs/relative_current.yaml 的「相对角差」「CBoard」两段逐字相同，只把相机换成
-# 视频回放、内参换成录制那段视频所用的相机（hikrobot，intrinsics 与 configs/offline.yaml 一致）。
-# 用途：在没有目标可拍的情况下验收「检测 → 当前帧选目标 → PnP → 角差 → (编码) 」整条链路。
+# Relative-output/CBoard settings follow relative_current.yaml; acquisition uses video.
+# Intrinsics belong to the recorded HikRobot camera and match configs/offline.yaml.
+# Exercises detection -> current target selection -> PnP -> relative angles -> encoding.
 #
 #   ./build/relative_aim -c=configs/relative_current_replay.yaml -dry-run -n=200 -csv=/tmp/r.csv
 #   ./build/relative_aim -c=configs/relative_current_replay.yaml -dry-run -n=200 -stream=8080
 #
-# ⚠️ 回放用的内参与实机（MindVision 1280x1024）不同：这份配置**不能**用于真机。
-# ⚠️ 视频回放的时间戳是「读到这一帧的时刻」，不是曝光时刻（见 documentation 里的说明）。
+# WARNING: replay intrinsics differ from the actual MindVision camera; never use this on hardware.
+# WARNING: video timestamps represent host frame-read time, not exposure time.
 # =============================================================================
 camera_name: "video"
 video_path: "assets/demo/demo.avi"
 video_loop: false
 video_frame_rate: 0
 
-#####-----相机内参（demo.avi 录制所用相机，1280x1024）-----#####
+#####-----Intrinsics: camera used to record demo.avi, 1280x1024-----#####
 camera_matrix: [1818.3669452465165, 0, 751.06226574703498, 0, 1822.494494078506, 530.43671556112133, 0, 0, 1]
 distort_coeffs: [-0.077944626599568856, 0.15447826031486889, -0.0025714394278524674, 0.00083016311301273629, 0]
 
-# 手眼外参（configs/offline.yaml 里已有的那组，做 demo 回放用）。
-# relative_reference: "camera_optical" 时**不读**这两项；改成 "gimbal" 才会用到。
+# Demo hand-eye extrinsics from configs/offline.yaml, not actual-camera calibration.
+# Ignored for camera_optical; used only for gimbal output.
 R_camera2gimbal: [-0.0083195760046954614, 0.010498791137270739, 0.99991027599468041, -0.99960756138647755, -0.026835747568381807, -0.0080352891314148939, 0.026748978935305992, -0.99958472279097077, 0.010717933047771133]
 t_camera2gimbal: [0.094969301833534511, 0.095006290298006682, 0.050987066291756609]
 
-#####-----检测模型-----#####
+#####-----Detection model-----#####
 yolo_name: yolov5
 min_confidence: 0.8
 yolov5_backend: "trt"
@@ -40,15 +40,15 @@ roi:
   height: 600
 use_roi: false
 
-#####-----对手颜色（demo.avi 里能检出的装甲板颜色）-----#####
+#####-----Enemy color: detectable armor in demo.avi-----#####
 enemy_color: "blue"
 
-#####-----相对角差（当前帧观测）-----#####
+#####-----Current-frame relative angles-----#####
 relative_reference: "camera_optical"   # (camera_optical) | gimbal
 relative_output_frame: "camera_optical"
 relative_tx_shape: false
-relative_max_frame_age_ms: 120         # (120) 回放时年龄 ≈ 单帧检测耗时
-relative_send_interval_ms: 0           # (0) 0 = 每帧都发
+relative_max_frame_age_ms: 120         # (120) Replay age is approximately detection duration
+relative_send_interval_ms: 0           # (0) Every eligible image
 relative_min_confidence: 0.8
 relative_max_reprojection_px: 15
 relative_min_depth_m: 0.1
@@ -62,7 +62,7 @@ servo_pitch_sign: 1
 servo_yaw_offset_deg: 0
 servo_pitch_offset_deg: 0
 
-#####-----CBoard（CAN）-----#####
+#####-----CBoard (CAN)-----#####
 quaternion_canid: 0x100
 bullet_speed_canid: 0x101
 send_canid: 0xff
@@ -75,7 +75,7 @@ vision_protocol: "v1"
 vision_handshake_request_canid: 0x310
 vision_handshake_response_canid: 0x311
 vision_control_canid: 0x312
-vision_can_ids_confirmed: false         # 本配置仅供 dry-run；vcan 用独立配置
+vision_can_ids_confirmed: false         # Dry-run only; use the separate vcan configuration
 vision_control_timeout_ms: 500
 relative_frame_timeout_ms: 120
 relative_tx_rate_hz: 0

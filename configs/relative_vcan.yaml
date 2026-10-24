@@ -1,4 +1,4 @@
-# 独立命名空间测试专用；四个 ID 均不是实机分配值。
+# Isolated-namespace testing only; none of these four IDs is a hardware assignment.
 camera_name: "video"
 video_path: "assets/demo/demo.avi"
 video_loop: true

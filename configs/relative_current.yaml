@@ -1,22 +1,22 @@
 # =============================================================================
-# 相对角差（当前帧观测）—— 真机专用配置
+# Current-frame relative angles: actual-camera configuration
 #
-# 入口：src/relative_aim.cpp（目标 relative_aim）
-#   ./build/relative_aim -c=configs/relative_current.yaml                # 实发（需要 can0 + 电控）
-#   ./build/relative_aim -c=configs/relative_current.yaml -dry-run -n=200 # 只算不发
-#   ./build/relative_aim -c=configs/relative_current.yaml -stream=8080    # HUD 直播（无显示器）
-#   ./build/relative_aim -c=configs/relative_current.yaml -csv=/tmp/r.csv # 逐帧 CSV
+# Entry: src/relative_aim.cpp (target relative_aim)
+#   ./build/relative_aim -c=configs/relative_current.yaml                # Live: approved IDs + firmware required
+#   ./build/relative_aim -c=configs/relative_current.yaml -dry-run -n=200 # Compute only
+#   ./build/relative_aim -c=configs/relative_current.yaml -stream=8080    # Headless HUD stream
+#   ./build/relative_aim -c=configs/relative_current.yaml -csv=/tmp/r.csv # Per-image CSV
 #
-# 语义（务必与电控对齐，协议见 documentation/relative_can_protocol.md）：
-#   relative_reference: "camera_optical" → 每帧下发「目标相对**相机光轴**的角差」，
-#   参考点 = 相机光心。只需要内参，不需要手眼外参（本机还没做手眼标定）。
-#   改成 "gimbal" 则按云台系参考轴计算，那时必须补 R_camera2gimbal / t_camera2gimbal。
+# Agree semantics with firmware; see documentation/vision_cboard_protocol.md.
+#   camera_optical: each image reports target error relative to the optical axis,
+#   originating at the optical center. Intrinsics only; actual hand-eye calibration is pending.
+#   gimbal requires calibrated R_camera2gimbal / t_camera2gimbal.
 #
-# 与 configs/mv_sua133gc.yaml 的关系：相机段（曝光/伽马/固定 pipeline/内参）逐字相同，
-# 只是多了下面「相对角差」与「CBoard」两段。这两段**不会**影响已有配置（都是新键）。
+# Camera settings (exposure/gamma/fixed pipeline/intrinsics) match mv_sua133gc.yaml.
+# Relative-output and CBoard sections add keys without changing existing configurations.
 # =============================================================================
 
-#####-----工业相机（MindVision MV-SUA133GC，USB3.0 线）-----#####
+#####-----Industrial camera: MindVision MV-SUA133GC, USB3.0 cable-----#####
 camera_name: "mindvision"
 exposure_ms: 2
 gamma: 0.5
@@ -26,7 +26,7 @@ mv_device_index: 0
 mv_frame_speed: 1
 mv_usb_reset: true
 
-# 固定 pipeline（逐项显式置位 + 回读校验，见 configs/mv_sua133gc.yaml 的详细说明）
+# Fixed pipeline: explicit writes and readback; see configs/mv_sua133gc.yaml.
 mv_analog_gain: 64
 mv_clr_temp_mode: 1
 mv_clr_temp_gain: "100,100,100"
@@ -35,14 +35,14 @@ mv_contrast: 100
 mv_saturation: 100
 mv_anti_flick: 0
 mv_light_frequency: 0
-# 本机这枚相机不支持下面两项（写了每次启动都告警 status=-4），不要加：
+# Unsupported on this camera (status=-4 on every startup); do not add:
 #   mv_wb_mode / mv_frame_rate
 
-#####-----相机内参（1280x1024，标定时间 2026-10-10，RMS 0.224 px）-----#####
+#####-----Intrinsics: 1280x1024, calibrated 2026-10-10, RMS 0.224 px-----#####
 camera_matrix: [1646.694479464929, 0, 629.3347317116185, 0, 1649.159708561839, 518.9448176031, 0, 0, 1]
 distort_coeffs: [-0.07563482581065475, 0.274743634586268, 0.001505720850613093, 0.0007716521495002592, 0]
 
-#####-----检测模型-----#####
+#####-----Detection model-----#####
 yolo_name: yolov5
 min_confidence: 0.8
 yolov5_backend: "trt"
@@ -57,25 +57,25 @@ roi:
   height: 600
 use_roi: false
 
-#####-----对手颜色（过滤用；必须与实际对手一致）-----#####
+#####-----Enemy color: standalone filter; v1 uses remote CONTROL color-----#####
 enemy_color: "blue"
 
-#####-----相对角差（当前帧观测）-----#####
-# "current" 路径的全部可选键；缺键时用括号里的默认值，这份配置把关键项都显式写出来，
-# 便于现场直接改数字、也便于日后再看时说清「当时用的是哪一版」。
+#####-----Current-frame relative angles-----#####
+# Optional current-path settings; parenthesized values describe defaults.
+# Important values are explicit for reproducible deployment and inspection.
 relative_reference: "camera_optical"   # (camera_optical) | gimbal
-relative_output_frame: "camera_optical" # 坐标系，不是协议版本；保留 relative_reference 兼容键
-relative_tx_shape: false               # 当前帧测量值不做 gain/死区/步长整形
-relative_max_frame_age_ms: 120         # (120) 观测年龄超时 → control=0，不把旧观测当新值发
-relative_send_interval_ms: 0           # (0) 0 = 每帧都发；设 50 则有效帧最多 20Hz
-relative_min_confidence: 0.8           # (min_confidence) 再上一道置信度阈值
-relative_max_reprojection_px: 15       # (15) 平均重投影误差超过它 → 这一帧几何不可信
-relative_min_depth_m: 0.1              # (0.1) 目标在相机前方的最小距离
-relative_filter_color: true            # (有 enemy_color 时为 true) 只保留对手颜色
+relative_output_frame: "camera_optical" # Coordinates, not protocol; compatibility key retained above
+relative_tx_shape: false               # No gain/deadband/step shaping of measurements
+relative_max_frame_age_ms: 120         # (120) Stale observations invalidate control
+relative_send_interval_ms: 0           # (0) Every eligible image; 50 means at most 20 Hz valid output
+relative_min_confidence: 0.8           # (min_confidence) Additional confidence threshold
+relative_max_reprojection_px: 15       # (15) Maximum mean reprojection error
+relative_min_depth_m: 0.1              # (0.1) Minimum forward camera depth in meters
+relative_filter_color: true            # (true with enemy_color) Retain selected enemy color
 
-# 整形（raw → TX）。这里是「显式默认值」：gain=1、无死区、无限幅外偏置，
-# 即 TX 与 raw 只差 1e-4 rad 的量化 —— 验收要看到的就是这个差。
-# 闭环调试时再按 documentation/relative_can_protocol.md §6 加大 deadband / 降 gain。
+# Signs/offsets apply to measurements; gain/deadband/step need relative_tx_shape: true.
+# With these signs/offsets, TX differs from raw only by 1e-4 rad quantization.
+# Firmware owns closed-loop limits; see documentation/relative_can_protocol.md section 6.
 servo_gain: 1.0
 servo_deadband_deg: 0.0
 servo_max_step_deg: 20
@@ -84,23 +84,23 @@ servo_pitch_sign: 1
 servo_yaw_offset_deg: 0
 servo_pitch_offset_deg: 0
 
-#####-----CBoard（CAN）-----#####
+#####-----CBoard (CAN)-----#####
 quaternion_canid: 0x100
 bullet_speed_canid: 0x101
 send_canid: 0xff
 can_interface: "can0"
 
-# 必须显式写 relative + 不等四元数：relative_aim 启动时会先校验这两个键，
-# 不满足就拒绝启动（而不是先构造 CBoard 卡在 [Cboard] Waiting for q...）
+# Explicit relative mode and no quaternion wait are mandatory and checked before
+# constructing CBoard, avoiding a hang at [Cboard] Waiting for q...
 can_command_mode: "relative"
 cboard_wait_imu: false
 relative_canid: 0xFE
 vision_protocol: "v1"
-# 以下是待电控确认的候选 ID，不是可直接接板的默认值。
+# Candidate IDs only: firmware approval is required before hardware connection.
 vision_handshake_request_canid: 0x310
 vision_handshake_response_canid: 0x311
 vision_control_canid: 0x312
-vision_can_ids_confirmed: false         # 接板前确认全部 4 个 ID 后再改 true
+vision_can_ids_confirmed: false         # Set true only after all four IDs are approved
 vision_control_timeout_ms: 500
 relative_frame_timeout_ms: 120
 relative_tx_rate_hz: 0

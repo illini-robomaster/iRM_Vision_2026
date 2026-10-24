@@ -1,32 +1,49 @@
-# 电控交接速查
+# Firmware integration handoff: vision ↔ CBoard
 
-协议正文：同目录 `vision_cboard_protocol.md`；验证范围：`vision_cboard_acceptance.md`。
+Protocol specification: `vision_cboard_protocol.md` in this directory.
+Verification scope and evidence: `vision_cboard_acceptance.md`.
 
-## 接板前共同确认（未完成项不得置 ID confirmed）
+## Joint checklist before connecting hardware
 
-- [ ] 4个标准CAN ID（角差、HELLO、ACK、CONTROL）、方向、波特率、终端电阻、接口名。
-- [ ] 当前 `camera_optical` 原点/参考轴；yaw左正、pitch上负；rad与int16 BE ×1e-4。
-- [ ] 没有手眼标定，不按gimbal/世界绝对角执行，不将候选ID当作实机分配。
-- [ ] shoot恒0；先禁用发射机构、电机输出或机械脱开，再验抓包。
-- [ ] 电控本地使能门、有效测量看门狗、限位/限速/限加速度、停车清缓存已实现。
-- [ ] 角差无session：停车后已经在总线上的旧帧可能到达，电控必须本地拒绝。
+Do not set `vision_can_ids_confirmed` until all applicable items are complete.
 
-## 电控最小流程
+- [ ] Agree on all four standard CAN IDs (relative angles, HELLO, ACK, CONTROL),
+      directions, bitrate, termination resistors, and interface name.
+- [ ] Agree on the current `camera_optical` origin/reference axis: yaw positive
+      left, pitch negative up; radians encoded as signed int16 BE in 1e-4 rad units.
+- [ ] No hand–eye calibration has been performed. Do not interpret the output as
+      gimbal-frame or world-frame absolute angles. Candidate IDs are not approved assignments.
+- [ ] `shoot` is always zero. Disable firing and motor output, or mechanically
+      disconnect the actuator, before inspecting traffic.
+- [ ] Implement firmware-local enable gating, a valid-observation watchdog,
+      position/velocity/acceleration limits, and cache invalidation on stop.
+- [ ] Relative-angle frames contain no session. Old frames already on the bus
+      may arrive after a stop; firmware must reject them using local gating.
 
-1. 上电禁止运动，生成新uint32 session，周期HELLO `01 01 session_BE 00 00`。
-2. 只接受回显session且status=0的ACK；NOT_READY继续重试，版本不兼容报错。
-3. 每80ms发CONTROL `03 01 session_BE flags seq`，seq每帧递增（255→0）。
-   flags：红停车02/启动03，蓝停车04/启动05；停车不能写颜色0。
-4. 收角差：先校验标准帧/DLC/保留位；本地未使能/会话未就绪则忽略有效角差。
-   八字节全0立即清有效测量。有效帧将yaw/pitch解码后交电控自己的受限控制器。
-5. 超时（建议按现场周期制定约100–120ms）清有效测量，绝不重复累加上一帧。
-   视觉掉线/重启、CONTROL超时或畸形帧后，重新HELLO并重新使能。
+## Minimum firmware sequence
 
-## 视觉侧操作顺序
+1. Start with motion prohibited, generate a new uint32 session, and periodically
+   send HELLO: `01 01 session_BE 00 00`.
+2. Accept only an ACK echoing that session with status=0. Retry on NOT_READY;
+   report an error on VERSION_MISMATCH.
+3. Send CONTROL every 80 ms: `03 01 session_BE flags seq`. Increment `seq` on
+   each transmission, wrapping 255→0. Flags: red stop=02, red enable=03,
+   blue stop=04, blue enable=05. Color zero is invalid even when stopping.
+4. On relative-angle reception, first validate standard-frame type, DLC, and
+   reserved bits. Ignore valid-angle frames unless locally enabled and the
+   session is ready. Eight zero bytes immediately invalidate the measurement.
+   Decode valid yaw/pitch and pass them to the firmware's own limited controller.
+5. Invalidate measurements on receive timeout; choose a deployment-specific
+   value, approximately 100–120 ms as a starting point. Never repeatedly
+   accumulate the previous frame. Re-handshake and explicitly re-enable after
+   vision disconnect/restart, CONTROL timeout, or malformed control.
 
-仓库路径 `/home/irm/iRM-Vision-2026`。先完成纯软件验收，再在
-`/home/irm/iRM-Vision-2026/configs/relative_current.yaml` 填写批准ID和
-`vision_can_ids_confirmed: true`。首次接板仅观察抓包，不允许运动。
+## Vision-side bring-up
+
+Repository: `/home/irm/iRM-Vision-2026`. Complete software acceptance first.
+Enter the approved IDs and set `vision_can_ids_confirmed: true` in
+`/home/irm/iRM-Vision-2026/configs/relative_current.yaml` only after agreement.
+For the first hardware connection, inspect traffic with motion prohibited.
 
 ```bash
 cd /home/irm/iRM-Vision-2026
@@ -35,10 +52,15 @@ make -C /home/irm/iRM-Vision-2026/build relative_servo_test relative_aim -j4
 /home/irm/iRM-Vision-2026/build/relative_aim -c=/home/irm/iRM-Vision-2026/configs/relative_current.yaml -csv=/tmp/board.csv -stream=8080
 ```
 
-再依次验证：NOT_READY→READY→蓝启动→停车→换红→恢复蓝→停止CONTROL心跳→重新握手→
-拔断相机/通信→SIGINT。各阶段独立抓包并核对CSV量化值、停止全0、shoot=0；先确认左右/上下
-方向，再低速受限闭环。Ctrl+C退出；不要用默认SIGTERM的timeout强杀相机。
+Verify in order: NOT_READY→READY→blue enable→stop→red→blue again→CONTROL
+heartbeat loss→re-handshake→camera/communication disconnect→SIGINT. Capture
+traffic independently in each phase and compare quantized angles with the CSV;
+check all-zero stops and `shoot=0`. Confirm horizontal/vertical signs before
+testing a low-speed, limited closed loop. Exit with Ctrl+C; do not force-stop
+the camera with `timeout`'s default SIGTERM.
 
-故障定位：无ACK先查方向/ID/DLC/版本；一直NOT_READY查模型、几何与新鲜图像；
-有ACK无有效角差查CONTROL的session/flags/seq、颜色、图像年龄与PnP；
-CSV有观测而总线没有看publish_ok、generation和tx_fail。不要靠关闭超时保护“修复”。
+Troubleshooting: no ACK → check direction, IDs, DLC, version. Persistent
+NOT_READY → check model, geometry, and fresh images. ACK but no valid angles →
+check CONTROL session/flags/sequence, color, image age, and PnP. Observations in
+CSV but no bus output → inspect `publish_ok`, generation, and `tx_fail`.
+Do not disable timeout protection to make a failing integration appear to work.

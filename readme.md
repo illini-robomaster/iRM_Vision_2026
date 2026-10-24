@@ -265,6 +265,13 @@ artifacts and must not be committed.
 
 ## 11. Related documents
 
+- `documentation/vision_cboard_handoff.md`: firmware-team integration checklist and bring-up.
+- `documentation/vision_cboard_protocol.md`: current v1 handshake, sessions, control, and wire format.
+- `documentation/vision_cboard_acceptance.md`: software evidence and pending physical/mechanical tests.
+- `documentation/relative_can_protocol.md`: relative-angle geometry, encoding, and configuration.
+- `documentation/handoff_relative_servo.md` and `documentation/relative_acceptance.md`:
+  historical development notes and cable/replay measurements, not current hardware approval.
+- `documentation/cboard_requirements.md`: legacy CBoard compatibility and firmware response checklist.
 - `documentation/intrinsic_calibration.md`: camera-only browser calibration, sample management,
   error reports, YAML export, and the future hand-eye extension contract. No CBoard is required.
 - [`AGENTS.md`](AGENTS.md) section 8.7: `detect_freq_visual_test` and the MindVision keys;

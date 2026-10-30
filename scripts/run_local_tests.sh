@@ -11,9 +11,12 @@
 #   7) replay_ab.sh             同录像 A/B 一致性基线（ORT vs cv::dnn，检测结果逐帧对比）
 #   8) board_state_can_test    CAN 握手 / 分片重组 / 丢失恢复（纯离线）
 #   9) minipc_test             UART 帧 / CRC / board_state（纯离线）
+#  10) relative_servo_test     相对角差编码（含整帧黄金向量）/ v1 会话状态机（纯离线）
+#  11) vision_cboard_sim.py    vcan 上的 MCU 模拟端：握手 / 启停 / 换色 / 换会话 / 心跳超时 /
+#                              图像节流时的独立 stop（隔离命名空间，不碰物理总线）
 #
 # 用法：
-#   bash scripts/run_local_tests.sh          # 跑全部 9 个用例
+#   bash scripts/run_local_tests.sh          # 跑全部 11 个用例
 #   bash scripts/run_local_tests.sh 2 4      # 只跑第 2、4 个用例
 #   LOG_DIR=/tmp/mylogs bash scripts/run_local_tests.sh
 #
@@ -229,6 +232,32 @@ run_case 8 "board_state_can_test：CAN 握手与分片重组（纯离线）" 15 
 
 run_case 9 "minipc_test：UART 帧与 CRC（纯离线）" 15 'all checks passed' \
   ./build/minipc_test ./build/minipc_test
+
+#  10) 相对角差编码 + v1 会话状态机：整帧黄金向量（01 00 04 D2 FD C9 00 00）、饱和、
+#      NaN/Inf -> stop、control=0 -> 全零、generation/超时/限频/停止优先等。纯离线。
+run_case 10 "relative_servo_test：角差编码与 v1 会话状态机（纯离线）" 20 'checks, 0 failures' \
+  ./build/relative_servo_test ./build/relative_servo_test
+
+#  11) MCU 模拟端：在隔离的用户+网络命名空间里建 vcan_test，跑真实 relative_aim。
+#      需要 unshare 可用 + 可用推理后端；否则按 SKIP 处理（不是失败）。
+SIM_BIN=./scripts/vision_cboard_sim.py
+if [ ! -x ./build/relative_aim ]; then
+  skip 11 "vision_cboard_sim.py：vcan 上的 MCU 模拟联调" "缺少 ./build/relative_aim"
+elif [ ! -x "${SIM_BIN}" ]; then
+  skip 11 "vision_cboard_sim.py：vcan 上的 MCU 模拟联调" "缺少 ${SIM_BIN}"
+elif ! unshare -rn true >/dev/null 2>&1; then
+  skip 11 "vision_cboard_sim.py：vcan 上的 MCU 模拟联调" \
+    "本机 unshare -rn 不可用（无法在隔离命名空间里建 vcan）"
+elif ! timeout -s INT 60 ./build/relative_aim -c=configs/relative_vcan.yaml -dry-run -n=1 \
+    >"${LOG_DIR}/11_probe.log" 2>&1 || ! grep -Eq 'backend=' "${LOG_DIR}/11_probe.log"; then
+  skip 11 "vision_cboard_sim.py：vcan 上的 MCU 模拟联调" \
+    "本机没有可用推理后端 / 模型（见 ${LOG_DIR}/11_probe.log，AGENTS.md §8.5）"
+else
+  run_case 11 "vision_cboard_sim.py：vcan MCU 模拟端（握手/启停/换色/换会话/心跳超时）" 300 \
+    'VCAN PASS' "${SIM_BIN}" \
+    unshare -rn bash -c "ip link add dev vcan_test type vcan && ip link set up vcan_test && \
+      exec ${SIM_BIN} --output ${LOG_DIR}/11_vision_cboard_vcan"
+fi
 
 # ---------------------------------------------------------------- 汇总
 

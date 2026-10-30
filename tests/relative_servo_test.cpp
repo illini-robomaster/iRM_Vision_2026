@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <future>
 #include <limits>
@@ -130,17 +131,32 @@ void test_encode()
   expect(decode_i16(data + 2) == 1234, "encode: dYaw 大端 int16，单位 1e-4 rad");
   expect(decode_i16(data + 4) == -567, "encode: dPitch 大端 int16，负值");
 
+  // 整帧黄金向量（documentation/relative_can_protocol.md §3.3）：电控侧按这张表解码，
+  // 任何字节变化都必须先改文档 + 版本号，不能只改代码。
+  const uint8_t golden[8] = {0x01, 0x00, 0x04, 0xD2, 0xFD, 0xC9, 0x00, 0x00};
+  expect(
+    std::memcmp(data, golden, 8) == 0,
+    "encode: 示例角差 +0.1234/-0.0567 -> 01 00 04 D2 FD C9 00 00（整帧黄金向量）");
+
   io::Command idle{false, false, 0, 0, 0};
   io::encode_relative_command(idle, data);
   expect(
     data[0] == 0x00 && decode_i16(data + 2) == 0 && decode_i16(data + 4) == 0,
     "encode: 无目标（control=0）时角差为 0，不会跳变");
+  const uint8_t stop_golden[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  expect(
+    std::memcmp(data, stop_golden, 8) == 0,
+    "encode: stop 帧是 8 个 0 字节（不留旧角度、不留 shoot）");
 
   io::Command saturated{true, false, 10.0, -10.0, 0.0};
   io::encode_relative_command(saturated, data);
   expect(
     decode_i16(data + 2) == 32767 && decode_i16(data + 4) == -32768,
     "encode: 超出 int16 范围时饱和（不回绕）");
+  const uint8_t saturated_golden[8] = {0x01, 0x00, 0x7F, 0xFF, 0x80, 0x00, 0x00, 0x00};
+  expect(
+    std::memcmp(data, saturated_golden, 8) == 0,
+    "encode: 饱和帧 -> 01 00 7F FF 80 00 00 00（整帧黄金向量）");
 
   io::Command roundtrip{true, false, -0.3, 0.3, 0.0};
   io::encode_relative_command(roundtrip, data);

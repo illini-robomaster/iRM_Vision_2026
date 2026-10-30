@@ -137,6 +137,68 @@ a timer, or directly add it to current/torque. Implement a receive watchdog
 Account for image and actuation latency. A stop must invalidate stored measurements.
 Session/enable gating remains mandatory because the angle frame has no session.
 
+### 3.3 Fixed layout — extend by version, not by reusing reserved bytes
+
+The eight bytes below are a **frozen contract**. There is no session field, no
+sequence number, and no spare field that may be overloaded later. A layout change
+requires a new version byte on the handshake and a new vehicle-side review; it
+must not be smuggled into `byte1` / `byte6..7`.
+
+| Byte | Value | Notes |
+|---|---|---|
+| 0 | `bit0` control, `bit1..7` = 0 | `bit1` is **not** shoot in this layout (see §3.5) |
+| 1 | `0x00` | reserved, always zero |
+| 2 | Δyaw int16 BE high | unit 1e-4 rad |
+| 3 | Δyaw int16 BE low | |
+| 4 | Δpitch int16 BE high | unit 1e-4 rad |
+| 5 | Δpitch int16 BE low | |
+| 6 | `0x00` | reserved (legacy UAV horizon distance is gone) |
+| 7 | `0x00` | reserved |
+
+Sign and unit contract, stated once here and used everywhere else:
+
+- `Δyaw`: **positive = target is to the left** of the reference axis, radians.
+- `Δpitch`: **positive = target is below**, negative = above (up-negative), radians.
+- Angles are the **measured observation of this image**, not world-frame absolute
+  angles and not an increment that must be applied once per frame.
+- Quantization is nearest (`lround`), resolution 1e-4 rad ≈ 0.0057°, saturation at
+  `+32767` / `-32768`, never wraparound.
+
+Golden vectors (asserted byte-for-byte by `tests/relative_servo_test.cpp`; the vcan
+peer decodes the same layout and compares every valid frame against the CSV):
+
+| Command | Eight bytes |
+|---|---|
+| Δyaw = +0.1234 rad, Δpitch = -0.0567 rad | `01 00 04 D2 FD C9 00 00` |
+| Δyaw = 0, Δpitch = 0 (valid but centred) | `01 00 00 00 00 00 00 00` |
+| stop / invalid / no target | `00 00 00 00 00 00 00 00` |
+| Δyaw = +10 rad, Δpitch = -10 rad (saturated) | `01 00 7F FF 80 00 00 00` |
+
+### 3.4 One observation is consumed once
+
+- Vision sends **at most one** angle frame per valid observation. The wire rate
+  therefore equals the observation rate; it is not a fixed-rate stream that repeats
+  the last measurement.
+- Repeating zero frames are new stop requests (observation expiry, control timeout,
+  disable, malformed CONTROL), never a re-send of the previous valid angles.
+- Firmware must consume each received frame once and update its stored measurement
+  from it. Re-applying the last frame on a timer is forbidden; the receive watchdog
+  is what decides when the stored measurement becomes invalid.
+- Because the payload carries no session, an old valid frame already inside the
+  kernel/hardware TX queue cannot be withdrawn. Firmware-local gating (session,
+  enable, colour, watchdog) is the only defence.
+
+### 3.5 This frame is not a firing decision
+
+- The encoder forces `shoot = 0` and every non-`control` bit to zero, whatever the
+  caller sets. There is no shoot bit in relative mode; `byte1` must stay zero and is
+  not a shoot flag (the absolute-angle frame uses `byte1` for shoot — do not reuse
+  that convention here).
+- A small Δyaw/Δpitch is an observation, not proof of alignment: bullet drop,
+  latency, and the firing interlock are out of scope for this link.
+- Relative mode is a measurement channel. Any firing decision belongs to the MCU and
+  to logic that is independent of "the error currently looks small".
+
 ## 4. Vision configuration
 
 ### 4.1 Entry point / CAN
@@ -198,6 +260,24 @@ watchdogs, and motion protection; initially prohibit actuation and inspect
 traffic independently. A legacy capture example is `candump -tz can0,0FE:7FF`;
 replace 0FE with the actual approved angle ID and capture the control IDs too.
 Do not transmit on a physical bus without the required peers/ACK arrangement.
+
+The v1 session/control link can be exercised end to end without embedded hardware.
+`scripts/vision_cboard_sim.py` is the MCU peer (IDs and timeouts read from the
+yaml, periodic HELLO, CONTROL heartbeat, decoded angle printing, interactive
+console); it refuses anything that is not a verified vcan interface:
+
+```bash
+# Scripted acceptance in an isolated user+network namespace (nothing touches can0):
+unshare -rn bash -c 'ip link add dev vcan_test type vcan && ip link set up vcan_test &&
+  exec ./scripts/vision_cboard_sim.py'
+
+# Manual console against an already running relative_aim:
+python3 scripts/vision_cboard_sim.py --no-spawn --interactive --verbose
+```
+
+Recorded runs and the exact PASS lines are in `relative_acceptance.md` §9;
+`scripts/run_local_tests.sh` cases 10-11 wrap both this peer and the offline
+encoder/state-machine test.
 
 Normal SIGINT/frame-limit exit attempts a best-effort stop with bounded retries.
 Camera starvation/observation expiry stops independently in v1; an industrial

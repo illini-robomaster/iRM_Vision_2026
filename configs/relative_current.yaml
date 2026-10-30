@@ -12,6 +12,12 @@
 #   originating at the optical center. Intrinsics only; actual hand-eye calibration is pending.
 #   gimbal requires calibrated R_camera2gimbal / t_camera2gimbal.
 #
+# This file is read by src/relative_aim.cpp (target `relative_aim`) ONLY. The other entry
+# points keep whatever their own config says:
+#   src/uav.cpp / src/uav_debug.cpp / src/sentry*.cpp / src/standard*.cpp /
+#   src/auto_buff_debug*.cpp  ->  CBoard::send() in `absolute` mode (`send_canid`)
+# Editing this file does not switch any of them to relative output.
+#
 # Camera settings (exposure/gamma/fixed pipeline/intrinsics) match mv_sua133gc.yaml.
 # Relative-output and CBoard sections add keys without changing existing configurations.
 # =============================================================================
@@ -85,22 +91,35 @@ servo_yaw_offset_deg: 0
 servo_pitch_offset_deg: 0
 
 #####-----CBoard (CAN)-----#####
-quaternion_canid: 0x100
-bullet_speed_canid: 0x101
-send_canid: 0xff
 can_interface: "can0"
 
-# Explicit relative mode and no quaternion wait are mandatory and checked before
-# constructing CBoard, avoiding a hang at [Cboard] Waiting for q...
-can_command_mode: "relative"
-cboard_wait_imu: false
-relative_canid: 0xFE
-vision_protocol: "v1"
-# Candidate IDs only: firmware approval is required before hardware connection.
-vision_handshake_request_canid: 0x310
-vision_handshake_response_canid: 0x311
-vision_control_canid: 0x312
-vision_can_ids_confirmed: false         # Set true only after all four IDs are approved
-vision_control_timeout_ms: 500
-relative_frame_timeout_ms: 120
-relative_tx_rate_hz: 0
+# --- Legacy telemetry / absolute-angle IDs ---
+quaternion_canid: 0x100                # CBoard -> vision: 四元数 w,x,y,z int16 BE /1e4
+bullet_speed_canid: 0x101              # CBoard -> vision: 弹速/模式/发射模式 int16 BE
+send_canid: 0xff                       # vision -> CBoard: 绝对角帧 ID；本配置不使用（mode 为
+                                       # relative），但 CBoard::read_yaml() 要求该键存在
+
+# --- Relative-angle link (v1): all four IDs in one block ---
+# 待电控确认 / PENDING MCU CONFIRMATION.
+# 下面四个值只是**候选**：确认总线占用之前，不要改端口径，也不要把它们改成
+# MCU 侧的 0x320–0x322 —— 那是板状态遥测协议的候选段（documentation/board_state_can_protocol.md），
+# 与角差链路冲突检查是分开的。确认顺序：先拿到整条总线的 ID 占用表，再统一改这里 + 电控固件。
+# ---------------------------------------------------------------------------
+relative_canid: 0xFE                   # vision -> CBoard: Δyaw/Δpitch 角差帧（无 session）
+vision_handshake_request_canid: 0x310  # CBoard -> vision: HELLO
+vision_handshake_response_canid: 0x311 # vision -> CBoard: HELLO_ACK
+vision_control_canid: 0x312            # CBoard -> vision: CONTROL（使能/颜色/心跳）
+# 必须保持 false，直到上面四个 ID 全部由电控确认并记录在案。
+# 不要把它改成 true 来绕过实机发送检查：vcan 之外的接口在 false 时会拒绝发送。
+vision_can_ids_confirmed: false
+
+# --- Transmission semantics (fixed this round: pure measurement, v1 session) ---
+can_command_mode: "relative"           # 相对角差；absolute 会回到 send_canid 的绝对角帧
+vision_protocol: "v1"                  # 握手 + 会话门控；legacy 必须显式选择
+relative_tx_shape: false               # 纯测量：不加 gain/死区/单帧限幅，只做符号+偏置+量化
+cboard_wait_imu: false                 # 相对角差不依赖姿态；true 会在构造时永久等四元数
+
+# --- Timeouts / rate ---
+vision_control_timeout_ms: 500         # 心跳超时：到点立即失效会话，必须重新 HELLO
+relative_frame_timeout_ms: 120         # 观测时效：到点补发 control=0（不等下一帧图像）
+relative_tx_rate_hz: 0                 # 0 = 不限速；stop 帧永远绕过限速

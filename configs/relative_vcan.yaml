@@ -1,4 +1,6 @@
 # Isolated-namespace testing only; none of these four IDs is a hardware assignment.
+# `yolov5_backend: auto` so the vcan acceptance also runs on a dev machine that only has
+# ONNX Runtime / cv::dnn: the real backend is printed at startup (`[YOLO] backend=...`).
 camera_name: "video"
 video_path: "assets/demo/demo.avi"
 video_loop: true
@@ -7,7 +9,7 @@ camera_matrix: [1818.3669452465165, 0, 751.06226574703498, 0, 1822.494494078506,
 distort_coeffs: [-0.077944626599568856, 0.15447826031486889, -0.0025714394278524674, 0.00083016311301273629, 0]
 yolo_name: yolov5
 min_confidence: 0.8
-yolov5_backend: "trt"
+yolov5_backend: "auto"
 yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
 yolov5_onnx_path: "assets/yolov5_0526.onnx"
 use_traditional: false

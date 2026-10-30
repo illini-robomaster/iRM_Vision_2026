@@ -134,3 +134,79 @@ Dry-run constructs no CBoard and opens no CAN socket. `-dry-enable=0|1` and
 measurements; `publish_ok` is not successful bus transmission. Inspect link
 statistics and independent captures for actual sends. `tx_frames` counts all
 relative/stop frames between CSV rows, not a one-to-one send result for that row.
+
+## 6. Two-end integration table
+
+Only `src/relative_aim.cpp` (target `relative_aim`) loads the keys in this section.
+`src/uav.cpp`, `src/uav_debug.cpp`, `src/sentry*.cpp`, `src/standard*.cpp` and
+`src/auto_buff_debug*.cpp` still call `CBoard::send()` in `absolute` mode via
+`send_canid`. Editing `configs/relative_current.yaml` does not migrate them.
+
+### 6.1 Wire, keys, and direction
+
+Candidate values are the ones currently in `configs/relative_current.yaml`. They are
+**not** approved hardware assignments: `vision_can_ids_confirmed` stays `false` until
+the whole bus ID map is agreed with the MCU. Do not shift them onto the MCU's
+`0x320–0x322` block (`board_state_can_protocol.md`) without that confirmation.
+
+| Direction | Config key | Candidate ID | Payload (DLC 8, big-endian) | When |
+|---|---|---|---|---|
+| MCU → vision | `vision_handshake_request_canid` | `0x310` | HELLO `01 01 session(4) 00 00` | on boot/restart, retry ≈100 ms |
+| vision → MCU | `vision_handshake_response_canid` | `0x311` | HELLO_ACK `02 01 session(4) status 00` | one per HELLO |
+| MCU → vision | `vision_control_canid` | `0x312` | CONTROL `03 01 session(4) flags seq` | heartbeat while enabled |
+| vision → MCU | `relative_canid` | `0xFE` | angle frame, see §2 | ≤1 per valid observation, plus stops |
+| MCU → vision | `quaternion_canid` | `0x100` | `w,x,y,z` int16 ÷1e4 | legacy telemetry; unused by this path |
+| MCU → vision | `bullet_speed_canid` | `0x101` | speed/mode/shoot-mode/ft_angle | legacy telemetry |
+
+### 6.2 Shared numeric contract and who owns what
+
+| Key | Default | Vision behaviour | MCU must also do |
+|---|---|---|---|
+| `vision_control_timeout_ms` | 500 | expire session, send stop, require new HELLO | keep CONTROL flowing while enabled |
+| `relative_frame_timeout_ms` | 120 | send stop when the observation expires | own receive watchdog (≈100 ms) |
+| `relative_tx_rate_hz` / `relative_send_interval_ms` | 0 / 0 | optional rate cap; **stops bypass it** | never assume a fixed frame rate |
+| `relative_tx_shape` | false | pure measurement (sign + static offset + quantization only) | implement all gain/deadband/limits itself |
+| `vision_can_ids_confirmed` | false | refuse to transmit on non-vcan interfaces | record the approved ID map |
+| `relative_output_frame` | `camera_optical` | references the optical axis, no extrinsics | treat Δ as error vs. its own reference axis |
+
+### 6.3 MCU-side gating checklist (all mandatory)
+
+1. Accept only Classical CAN, standard 11-bit IDs, `DLC == 8`; drop extended/RTR/error frames.
+2. Match the configured ID exactly; unknown IDs change no state.
+3. Domain-separate by ID: HELLO / CONTROL / angle frames are three different IDs, not one
+   with a type byte (only HELLO, ACK, CONTROL carry a message-type byte).
+4. CONTROL: accept only the **current** session; a foreign session changes nothing and does
+   not refresh the heartbeat.
+5. CONTROL: `seq` forward difference must be 1..127 (mod 256); duplicates and reordering are
+   ignored. A new session resets `seq`.
+6. CONTROL: `flags` bits 4..7 must be zero and colour must be 1 (red) or 2 (blue); a stop must
+   still carry a legal colour. Anything else fails closed immediately (do not wait for timeout).
+7. Control heartbeat watchdog: on expiry, stop actuating on vision data and invalidate the
+   stored measurement.
+8. Angle frames have **no session field**: gate them on local session/enable/colour plus the
+   receive watchdog. Never "verify" the session from the angle payload — it is not there.
+9. `control=0` or eight zero bytes → invalidate the stored measurement at once; never keep
+   driving on the previous angles.
+10. Consume each frame once. Never accumulate the last observation on a timer or add it
+    directly to current/torque.
+11. No firing decision: relative frames force `shoot = 0`, and `byte1` is not a shoot flag.
+
+### 6.4 Repeatable vision-side acceptance
+
+`scripts/vision_cboard_sim.py` is an independent MCU peer for a verified `vcan`
+interface (Python standard library only). It derives all IDs from the yaml, sends
+periodic HELLO, enables/disables, switches colour and session, drops the CONTROL
+heartbeat, decodes and prints every angle frame with its receive time, and asserts:
+
+- no valid angle frame before handshake + enable;
+- disable / colour change / malformed CONTROL stop valid output immediately;
+- CONTROL silence expires the session, and the old session is rejected afterwards;
+- a new session re-handshakes and resumes;
+- one observation produces at most one valid frame; stops are not rate-limited;
+- when image acquisition is throttled below the observation timeout, vision emits an
+  independent stop between images;
+- every valid wire frame matches the published CSV in order (int16 values included);
+- SIGINT shutdown writes a stop frame.
+
+See `documentation/relative_acceptance.md` for recorded runs and
+`scripts/run_local_tests.sh` cases 10–11 for the local invocation.

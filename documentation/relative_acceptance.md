@@ -235,4 +235,48 @@ v1 measurement contract**. Default output is unshaped and firmware owns safety.
 6. The initial snapshot noted a SocketCAN write-versus-close/reconnect race.
    That was a historical transport observation, not a current whole-repository
    concurrency guarantee. See current v1 acceptance for serialized transactions,
+
+## 9. Repeatable vcan peer re-run — October 30, 2026
+
+Added after the v1 acceptance: `scripts/vision_cboard_sim.py` is now a full MCU
+peer (IDs/timeouts read from the yaml, periodic HELLO, decoded angle printing,
+interactive console) so the link can be re-verified without embedded or Feeder.
+
+Command (isolated user+network namespace, no physical bus):
+
+```bash
+unshare -rn bash -c 'ip link add dev vcan_test type vcan && ip link set up vcan_test &&
+  exec ./scripts/vision_cboard_sim.py'
+```
+
+Recorded output on Jetson Orin Nano (aarch64, TensorRT backend, `assets/demo/demo.avi`
+replay, candidate IDs `0x300/0x301/0x302/0x303` from `configs/relative_vcan.yaml`):
+
+```text
+PASS handshake: READY ACK echoes session 0x12345678
+PASS gating: no valid angle frame before CONTROL (handshake only)
+PASS enable blue: 43 valid frames, 0 stops
+PASS disable: immediate stop, in-flight observation dropped
+PASS colour switch red->blue: old-colour observations gated, blue resumes
+PASS control timeout: stop emitted, old session rejected
+PASS new session 0x12345679: re-handshake and valid output
+PASS malformed CONTROL: immediate fail-closed stop (no timeout wait)
+PASS SIGINT shutdown: stop frame in 55 ms, clean exit
+PASS wire int16 angles match the published CSV order (87 frames)
+PASS slow image (1.0 fps): 2 valid, 3 stops, one frame per observation
+PASS slow-image SIGINT shutdown: stop frame in 429 ms
+VCAN PASS
+```
+
+The slow-image scenario derives a config with `video_frame_rate: 1` (image period
+1 s ≫ `relative_frame_timeout_ms: 120`) and observes: one valid frame per image,
+plus an independent all-zero stop about 96 ms after each valid frame with no new
+image in between. The 429 ms shutdown stop is the documented "file decoding has no
+hard deadline" case — the main loop can be inside a throttled frame read when the
+signal arrives.
+
+Still **unverified** by this run: a real CBoard/Feeder on `can0`, bitrate/termination,
+motor response, firing, and the approved ID map (`vision_can_ids_confirmed` stays
+`false`; `0xFE/0x310/0x311/0x312` remain candidates).
+
    untested flood/starvation cases, and the absence of sanitizer verification.

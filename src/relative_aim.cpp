@@ -184,6 +184,7 @@ try {
   // ===== 1) 配置校验：全部在构造 CBoard / Camera 之前完成 =====
   // 顺序很重要：CBoard 构造可能永久阻塞（等四元数），不能「先构造再检查配置」。
   auto yaml = tools::load(config_path);
+  const bool use_control_color = tools::optional_bool(yaml, "vision_use_control_color", true);
   const auto command_mode = tools::optional_string(yaml, "can_command_mode", "absolute");
   if (!dry_run && command_mode != "relative") {
     tools::logger()->error(
@@ -233,6 +234,9 @@ try {
   }
 
   tools::logger()->info("[relative_aim] 配置：{}", config_path);
+  tools::logger()->info(
+    "[relative_aim] CONTROL 颜色覆盖={}（关闭时由 relative_filter_color 决定是否筛选颜色）",
+    use_control_color ? "开启" : "关闭");
   tools::logger()->info(
     "[relative_aim] 模式：{}，角差来源={}，协议={}，相对帧 ID=0x{:X}，发送最小间隔={:.1f}ms",
     dry_run ? "dry-run（不打开 CAN）" : "实发", source,
@@ -357,19 +361,22 @@ try {
     const double detect_ms = tools::delta_time(t_detect, t_capture) * 1000.0;
     detect_ms_sum += detect_ms;
 
-    // 板端控制快照：v1 下 enable / color 由电控决定；legacy 下固定 active、颜色取 config
+    // v1 enable still comes from the MCU; color override is deployment-configurable.
 
     auto_aim::RelativeObservation obs;
+    std::string target_color_text = "-";
     if (use_tracker) {
       auto targets = tracker->track(armors, frame_time);
       obs = observe_via_tracker(*servo, *tracker, armors, targets);
     } else {
       auto_aim::RelativeFilter filter = estimator->filter();
-      if (snapshot.color != 0) {
-        // CONTROL 下发的颜色优先于 config 里的 enemy_color（只对 current 路径生效）
+      if (snapshot.color != 0 && use_control_color) {
+        // Keep the default v1 target-color behavior unless this deployment
+        // explicitly disables the remote override for color-agnostic aiming.
         filter.filter_color = true;
         filter.enemy_color = snapshot.color == 1 ? auto_aim::Color::red : auto_aim::Color::blue;
       }
+      target_color_text = filter.filter_color ? auto_aim::COLORS[filter.enemy_color] : "any";
       obs = estimator->observe(armors, img.size(), frame_time, t_detect, &filter);
     }
     if ((dry_run || (link && protocol.v1)) && !snapshot.enable) {
@@ -448,11 +455,11 @@ try {
       tools::draw_text(
         canvas,
         fmt::format(
-          "link={} sess={} ctl={} seq={} gen={}", io::to_string(snapshot.state),
+          "link={} sess={} ctl={} target={} seq={} gen={}", io::to_string(snapshot.state),
           (snapshot.has_session ? fmt::format("0x{:08X}", snapshot.session_id) : std::string("-")),
           snapshot.color == 0 ? std::string("-")
                               : (snapshot.color == 1 ? std::string("red") : std::string("blue")),
-          static_cast<int>(snapshot.sequence), snapshot.generation),
+          target_color_text, static_cast<int>(snapshot.sequence), snapshot.generation),
         {10, 210}, {0, 255, 255}, 0.7, 2);
 
       if (stream_port > 0) stream.publish(canvas);

@@ -27,7 +27,10 @@ yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
 yolov5_onnx_path: "assets/yolov5_0526.onnx"
 use_traditional: false
 use_roi: false
+# Test mode: nearest valid armor to image center, regardless of color.
+# enemy_color is retained for compatibility but filtering/remote override are off.
 enemy_color: "blue"
+vision_use_control_color: false
 relative_reference: "camera_optical"
 relative_output_frame: "camera_optical"
 relative_tx_shape: false
@@ -36,7 +39,7 @@ relative_send_interval_ms: 0
 relative_min_confidence: 0.8
 relative_max_reprojection_px: 15
 relative_min_depth_m: 0.1
-relative_filter_color: true
+relative_filter_color: false
 servo_gain: 1.0
 servo_deadband_deg: 0.0
 servo_max_step_deg: 20

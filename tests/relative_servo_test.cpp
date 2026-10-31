@@ -482,6 +482,24 @@ void test_estimator()
     obs.candidates == 2 && obs.target_id == auto_aim::target_id(near_center),
     "est: 选目标与检测列表顺序无关（确定性）");
 
+  // Color-agnostic deployment: choose nearest valid armor across both teams.
+  auto any_color = filter;
+  any_color.filter_color = false;
+  const auto red_near = make_armor(4, 0.9f, points, {0.5f, 0.5f});
+  obs = est.observe({far, red_near}, size, t0, t0, &any_color);
+  expect(
+    obs.valid && obs.candidates == 2 && obs.target_id == auto_aim::target_id(red_near),
+    "est: 不筛颜色时，近处红板胜过远处蓝板");
+  const auto red_far = make_armor(4, 0.9f, points, {0.1f, 0.1f});
+  obs = est.observe({red_far, near_center}, size, t0, t0, &any_color);
+  expect(
+    obs.valid && obs.candidates == 2 && obs.target_id == auto_aim::target_id(near_center),
+    "est: 不筛颜色时，近处蓝板胜过远处红板");
+  obs = est.observe({red_near, far}, size, t0, t0, &any_color);
+  expect(
+    obs.valid && obs.target_id == auto_aim::target_id(red_near),
+    "est: 不筛颜色的最近目标选择与输入顺序无关");
+
   // 整形：max_step 生效且被记录（相对角差默认**不做**整形，这里显式打开）
   auto small_step = limits;
   small_step.max_step = 2.0 / 57.3;  // 2deg

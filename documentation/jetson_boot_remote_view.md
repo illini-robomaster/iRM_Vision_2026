@@ -83,8 +83,32 @@ complete bus allocation and flashed firmware before powering actuators.
 The conservative `configs/relative_current.yaml` remains unchanged.
 
 No valid angle is sent without a fresh image, a matching HELLO session and
-CONTROL(enable=1). CONTROL supplies the target color. Relative aiming does
-not require measured gimbal yaw/pitch. The independent board-state telemetry
+CONTROL(enable=1). The current deployment intentionally selects the nearest
+valid armor to image center **regardless of its detected color**:
+
+```yaml
+relative_filter_color: false
+vision_use_control_color: false
+```
+
+`vision_use_control_color` defaults to `true` for other configurations, retaining
+the existing v1 target-color override. With it disabled, the estimator's local
+`relative_filter_color` setting controls filtering. Both switches are required
+for color-agnostic operation; merely disabling the local filter is not enough
+when remote color override is enabled. The wire CONTROL frame is still validated
+and required for session/enable/heartbeat. HUD `ctl` shows accepted wire color;
+`target=any` indicates the current color-agnostic selector. There is no own-team
+color inversion. This test mode can select friendly armor; use it only in a
+controlled test environment. Confidence, keypoint, geometry and freshness checks
+remain active. Selection is per-image, not a persistent identity lock.
+
+Color-agnostic update validation: `relative_aim` and `relative_servo_test` build;
+134 checks, 0 failures, including nearest red/blue cross-color selection in
+both input orders. A separate real-TensorRT vcan replay accepted valid angles
+under both red and blue CONTROL; 43 blue-target observations were accepted while
+CONTROL said red. No physical control frames were injected by this test.
+
+Relative aiming does not require measured gimbal yaw/pitch. The independent board-state telemetry
 client is not started by this entry point; its 21-byte/four-fragment codec has
 been tested separately. No automatic firing is implemented.
 

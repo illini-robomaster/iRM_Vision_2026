@@ -5,9 +5,11 @@ Date: October 24, 2026
 ## 1. Scope
 
 This is a Jetson-initiated telemetry session. After a three-message handshake,
-CBoard streams the same 29-byte `board_state` payload used by the minipc UART
-link: quaternion (wxyz), measured offset-corrected motor yaw/pitch, bullet
-speed, and one opaque mode byte.
+CBoard streams the current Embedded 2026 21-byte `board_state_t` payload:
+quaternion (wxyz), bullet speed, and one opaque mode byte. CAN v1 does not
+carry measured motor yaw/pitch; relative-angle aiming does not need them.
+The Jetson UART `BoardState` remains a separate 29-byte absolute-pose format.
+Do not use that UART structure to encode or reassemble CAN frames.
 
 This protocol does not enable motors, authorize firing, or replace the separate
 vision↔CBoard relative-angle control protocol. Telemetry must remain available
@@ -104,7 +106,7 @@ to task handoff for this link.
 
 ## 4. Board-state fragmentation
 
-The 29-byte payload is sent in five frames on the data CAN ID. There is no UART
+The 21-byte payload is sent in four frames on the data CAN ID. There is no UART
 `ST`/`ED`, UART CRC8, or additional application CRC: Classical CAN already
 provides per-frame integrity. Loss and stale-sample detection use the session
 tag, sample sequence, fragment mask, and timeouts.
@@ -113,33 +115,34 @@ Each fragment has two metadata bytes and six payload bytes:
 
 | Bytes | Meaning |
 |---|---|
-| 0 | bits7..5 fragment index `0..4`; bits4..0 sample sequence |
+| 0 | bits7..5 fragment index `0..3`; bits4..0 sample sequence |
 | 1 | session tag = `session_id & 0xFF` |
 | 2..7 | six bytes of the little-endian `board_state` image |
 
-The payload image is exactly the UART `BoardState`/`board_state_t` layout:
+The payload image is `BoardStateCanPayload` on Jetson and `board_state_t`
+in Embedded 2026 (not the Jetson UART `BoardState`):
 
 ```text
-float q[4] @0 (wxyz), float yaw @16, float pitch @20,
-float bullet_speed @24, uint8_t mode[1] @28; total 29 bytes
+float q[4] @0 (wxyz), float bullet_speed @16,
+uint8_t mode[1] @20; total 21 bytes
 ```
 
 Both targets are little-endian, so these payload bytes are copied without
 byte swapping. This little-endian float rule applies only to the payload;
 handshake integers remain big-endian.
 
-For fragment `f`, copy six payload bytes starting at offset `6*f`. Fragment 4
-is the exception: only five real bytes remain (`24..28`), and frame byte7 must
-be zero padding. Every fragment still has DLC=8.
+For fragment `f`, copy six payload bytes starting at offset `6*f`. Fragment 3
+is the exception: only three real bytes remain (`18..20`), and frame bytes5..7
+must be zero padding. Every fragment still has DLC=8.
 
 Sample sequence increments modulo 32. For sample sequence 7 and session tag
-`0x78`, metadata byte0 is `07/27/47/67/87` for fragments 0 through 4, and
+`0x78`, metadata byte0 is `07/27/47/67` for fragments 0 through 3, and
 metadata byte1 is always `78`.
 
 ### 4.1 Receiver rules
 
-- Require DLC=8, fragment index `0..4`, the active session tag, and zero padding
-  in fragment 4.
+- Require DLC=8, fragment index `0..3`, the active session tag, and zero padding
+  in bytes5..7 of fragment 3.
 - Fragments may arrive in any order. Keep at most one partial sample, identified
   by its sequence and session tag.
 - A newer sequence abandons the previous partial sample. Relative to the current
@@ -148,16 +151,21 @@ metadata byte1 is always `78`.
   duplicate fragment invalidates the partial sample; an identical duplicate is
   harmless.
 - A partial sample older than 50 ms is discarded.
-- Publish only after fragments 0 through 4 all arrive. Validate finite values
+- Publish only after fragments 0 through 3 all arrive (completion mask `0x0F`). Validate finite values
   and a nondegenerate quaternion, normalize the quaternion, and timestamp the
   completed sample at reception of its final missing fragment.
 - Never interpolate or expose a partial/torn sample. Clear reassembly and IMU
   history on session changes.
 
-At the nominal 100 Hz, five fragments make 500 CAN frames/s. The data source
-must not start the next sample until all five fragments of the current sample
+At the nominal 100 Hz, four fragments make 400 CAN frames/s. The data source
+must not start the next sample until all four fragments of the current sample
 have been queued; bus congestion may reduce the effective rate but must not
 cause overlapping sample sequences on the wire.
+
+`state()` retains the shared `MinipcState` API, but motor `yaw` and `pitch`
+are NaN after CAN decoding: unavailable, not measured zero. Do not feed them
+into an absolute-pose controller. Adding absolute motor feedback later requires
+an explicit, coordinated wire-format change on both ends.
 
 ## 5. Integration checks
 
@@ -182,7 +190,13 @@ sample arrives or the final stream is stale. `configs/board_state_can.yaml` is
 the physical CAN1/`can0` configuration; its IDs are confirmed on the current
 test bus and must be rechecked before deployment on another robot.
 
-The Embedded 2023 example has two targets from the same source:
+The current Embedded 2026 integration is `vehicles/Omni/eoh_mc02.cc`, target
+`eoh_infant` on DM_MC_02 FDCAN1. The 21-byte/four-fragment layout is aligned
+with its source; physical interoperability with that target still needs a
+powered-board test. Historical Type C physical verification below is not
+verification of this MC02 target or the current payload.
+
+The historical Embedded 2023 example has two targets from the same source:
 `example_minipc_cboardcan.elf` (Jetson link on CAN1) and
 `example_minipc_cboardcan_can2.elf` (Jetson link on CAN2). Gimbal motors remain
 on CAN1 in both variants. Select the port that is physically wired; a no-ACK

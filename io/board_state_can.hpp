@@ -19,15 +19,26 @@
 
 namespace io
 {
-
 // Wire definitions for documentation/board_state_can_protocol.md. The existing
 // vision-control session is intentionally independent; these IDs must not
 // overlap its IDs, legacy telemetry IDs, or motor traffic.
 constexpr uint8_t BOARD_STATE_CAN_VERSION = 1;
 constexpr size_t BOARD_STATE_CAN_FRAME_LEN = 8;
-constexpr size_t BOARD_STATE_CAN_FRAGMENT_COUNT = 5;
+constexpr size_t BOARD_STATE_CAN_FRAGMENT_COUNT = 4;
 constexpr size_t BOARD_STATE_CAN_FRAGMENT_PAYLOAD = 6;
 constexpr uint8_t BOARD_STATE_CAN_SEQUENCE_MASK = 0x1F;
+
+// Current Embedded CAN v1 wire image. Deliberately separate from the 29-byte
+// UART BoardState: relative aiming does not require measured motor yaw/pitch.
+struct __attribute__((packed)) BoardStateCanPayload
+{
+  float q[4];  // w, x, y, z; little-endian float32
+  float bullet_speed;
+  uint8_t mode[1];
+};
+static_assert(sizeof(BoardStateCanPayload) == 21, "CAN board state must stay 21 bytes");
+static_assert(offsetof(BoardStateCanPayload, bullet_speed) == 16, "CAN bullet speed offset");
+static_assert(offsetof(BoardStateCanPayload, mode) == 20, "CAN mode offset");
 
 enum class BoardStateCanMessage : uint8_t
 {
@@ -70,7 +81,7 @@ bool decode_board_state_can_final_ack(
   const uint8_t * data, uint8_t dlc, uint8_t & version, uint32_t & session_id);
 bool decode_board_state_can_ack(const uint8_t * data, uint8_t dlc, BoardStateCanAck & ack);
 bool encode_board_state_can_fragment(
-  const BoardState & state, uint32_t session_id, uint8_t sequence, uint8_t fragment,
+  const BoardStateCanPayload & state, uint32_t session_id, uint8_t sequence, uint8_t fragment,
   uint8_t data[8]);
 bool decode_board_state_can_fragment_header(
   const uint8_t * data, uint8_t dlc, uint8_t & sequence, uint8_t & session_tag, uint8_t & fragment);
@@ -108,6 +119,7 @@ public:
   bool transmit(Clock::time_point now, const Sender & sender);
 
   const BoardStateCanConfig & config() const { return config_; }
+  // q/bullet_speed/mode are available; yaw/pitch are NaN (not sent by CAN v1).
   MinipcState state() const;
   Eigen::Quaterniond imu_at(Clock::time_point timestamp);
 
@@ -164,7 +176,7 @@ private:
     bool active = false;
     uint8_t sequence = 0;
     uint8_t mask = 0;
-    std::array<uint8_t, sizeof(BoardState)> bytes{};
+    std::array<uint8_t, sizeof(BoardStateCanPayload)> bytes{};
     Clock::time_point since{};
   };
 

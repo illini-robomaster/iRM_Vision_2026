@@ -14,7 +14,7 @@ cboard_wait_imu: false
 # motor command/feedback traffic.
 board_state_can_control_canid: 0x320   # Jetson -> CBoard: START / final ACK
 board_state_can_response_canid: 0x321  # CBoard -> Jetson: ACK + color
-board_state_can_data_canid: 0x322      # CBoard -> Jetson: five state fragments
+board_state_can_data_canid: 0x322      # CBoard -> Jetson: four state fragments (21 bytes)
 board_state_can_retry_ms: 100.0
 board_state_can_fragment_timeout_ms: 50.0
 board_state_can_stream_timeout_ms: 500.0

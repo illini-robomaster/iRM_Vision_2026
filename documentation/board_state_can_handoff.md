@@ -1,15 +1,22 @@
 # Board-state CAN handoff — Jetson / Vision 2026
 
 Date: October 24, 2026
-Status: implemented and verified on Jetson aarch64, vcan, and the physical Type C
-CAN1 ↔ Jetson `can0` pathway.
+Status: CAN payload aligned to Embedded 2026 (21 bytes, four fragments).
+The historical physical Type C results below are not verification of the
+current MC02 target/payload; repeat hardware acceptance before deployment.
 
 The authoritative byte-level specification is
 [board_state_can_protocol.md](board_state_can_protocol.md). This document is the
 integration and bring-up guide. The Embedded-side counterpart is
 `iRM_Embedded_2023/docs/board_state_can_handoff.md`.
 
-## 1. Current baseline
+## 1. Baseline and hardware provenance
+
+Current source counterpart: `iRM_Embedded_2026/shared/libraries/board_state_can_protocol.h`
+and `minipc_protocol.h`, integrated in `vehicles/Omni/eoh_mc02.cc` (`eoh_infant`,
+DM_MC_02 FDCAN1). Current physical interoperability is pending.
+
+The following commits and physical results are historical:
 
 | Repository | Branch | Implementation commit |
 |---|---|---|
@@ -68,20 +75,19 @@ Retries and recovery:
 - There is no continuing Jetson heartbeat in v1. CBoard accepts a new START at
   any time and otherwise continues streaming until reset/readiness loss.
 
-The 29-byte little-endian `BoardState` payload is sent in five frames on
+The 21-byte little-endian `BoardStateCanPayload` is sent in four frames on
 `0x322`:
 
 ```text
-float q[4] @0 (wxyz), float yaw @16, float pitch @20,
-float bullet_speed @24, uint8_t mode[1] @28
+float q[4] @0 (wxyz), float bullet_speed @16, uint8_t mode[1] @20
 ```
 
 Fragment byte0 is `(fragment_index << 5) | (sample_seq & 0x1F)`; byte1 is
-`session_id & 0xFF`; bytes2..7 carry six payload bytes. Fragment 4 has five real
-payload bytes and a zero pad byte. There is no UART `ST`/`ED` or application CRC
+`session_id & 0xFF`; bytes2..7 carry six payload bytes. Fragment 3 has three real
+payload bytes and three zero pad bytes (frame bytes5..7). There is no UART `ST`/`ED` or application CRC
 on CAN.
 
-At 100 Hz this is five frames/sample, or 500 CAN frames/s. The receiver publishes
+At 100 Hz this is four frames/sample, or 400 CAN frames/s. The receiver publishes
 only complete, same-session samples with finite values and a nondegenerate
 quaternion. Out-of-order fragments are supported; torn, stale, conflicting, and
 partial samples are not published.
@@ -113,8 +119,7 @@ const auto snapshot = link.snapshot();
 if (snapshot.state_valid) {
   const auto state = link.state();
   const Eigen::Quaterniond q_attitude = state.q;
-  const float measured_motor_yaw = state.yaw;
-  const float measured_motor_pitch = state.pitch;
+  // state.yaw/state.pitch are NaN: current CAN v1 has no motor angles.
   const float bullet_speed = state.bullet_speed;
   const uint8_t opaque_mode = state.mode[0];
 }
@@ -126,6 +131,9 @@ link.stop();
 Important API semantics:
 
 - Always check `snapshot().state_valid` before treating `state()` as fresh.
+- CAN `state().yaw/pitch` are unavailable (NaN), not measured zero. Relative
+  aiming needs no motor angles. The UART 29-byte `BoardState` is unchanged;
+  absolute-pose feedback must be negotiated separately, not inferred from q.
 - `state().timestamp` is the Jetson reception time of the final missing
   fragment. The v1 payload has no MCU source timestamp.
 - `imu_at(timestamp)` interpolates bounded completed-sample history and never
@@ -175,7 +183,19 @@ make -C build board_state_can_test minipc_test relative_servo_test relative_aim 
 ./build/relative_servo_test
 ```
 
-Recorded results:
+Current Embedded 2026 alignment validation (Jetson aarch64):
+
+- The build command above passes for all four targets.
+- `board_state_can_test`: all checks pass, including independent fixed four-frame
+  firmware wire vectors, publication on fragment 3, rejection of old fragment 4,
+  all three tail padding bytes, and unavailable motor-angle markers.
+- `minipc_test`: all checks pass; the 29-byte UART format is unchanged.
+- `relative_servo_test`: 131 checks, 0 failures; relative-angle control unchanged.
+- Python simulator syntax check passes (`python3 -m py_compile`).
+- vcan integration was not rerun: no vcan interface exists and passwordless sudo
+  is unavailable. No physical CAN transmission or firmware flashing was done.
+
+Historical recorded results (not acceptance of the current MC02 payload):
 
 - x86: CAN/UART offline suites and ASan/UBSan CAN suite pass.
 - Jetson aarch64: CAN/UART suites pass; `relative_aim` builds;

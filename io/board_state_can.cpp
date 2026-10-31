@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <utility>
@@ -181,7 +182,7 @@ bool decode_board_state_can_ack(const uint8_t * data, uint8_t dlc, BoardStateCan
 }
 
 bool encode_board_state_can_fragment(
-  const BoardState & state, uint32_t session_id, uint8_t sequence, uint8_t fragment,
+  const BoardStateCanPayload & state, uint32_t session_id, uint8_t sequence, uint8_t fragment,
   uint8_t data[8])
 {
   if (data == nullptr || fragment >= BOARD_STATE_CAN_FRAGMENT_COUNT) return false;
@@ -189,7 +190,8 @@ bool encode_board_state_can_fragment(
   data[0] = static_cast<uint8_t>((fragment << 5) | (sequence & BOARD_STATE_CAN_SEQUENCE_MASK));
   data[1] = board_state_can_session_tag(session_id);
   const size_t offset = fragment * BOARD_STATE_CAN_FRAGMENT_PAYLOAD;
-  const size_t length = std::min(BOARD_STATE_CAN_FRAGMENT_PAYLOAD, sizeof(BoardState) - offset);
+  const size_t length =
+    std::min(BOARD_STATE_CAN_FRAGMENT_PAYLOAD, sizeof(BoardStateCanPayload) - offset);
   std::memcpy(data + 2, reinterpret_cast<const uint8_t *>(&state) + offset, length);
   return true;
 }
@@ -200,7 +202,10 @@ bool decode_board_state_can_fragment_header(
   if (data == nullptr || dlc != 8) return false;
   fragment = static_cast<uint8_t>(data[0] >> 5);
   if (fragment >= BOARD_STATE_CAN_FRAGMENT_COUNT) return false;
-  if (fragment == BOARD_STATE_CAN_FRAGMENT_COUNT - 1 && data[7] != 0) return false;
+  if (
+    fragment == BOARD_STATE_CAN_FRAGMENT_COUNT - 1 &&
+    (data[5] != 0 || data[6] != 0 || data[7] != 0))
+    return false;
   sequence = static_cast<uint8_t>(data[0] & BOARD_STATE_CAN_SEQUENCE_MASK);
   session_tag = data[1];
   return true;
@@ -430,7 +435,8 @@ void BoardStateCanCore::on_fragment_locked(const uint8_t * data, uint8_t dlc, Cl
   }
 
   const size_t offset = fragment * BOARD_STATE_CAN_FRAGMENT_PAYLOAD;
-  const size_t length = std::min(BOARD_STATE_CAN_FRAGMENT_PAYLOAD, sizeof(BoardState) - offset);
+  const size_t length =
+    std::min(BOARD_STATE_CAN_FRAGMENT_PAYLOAD, sizeof(BoardStateCanPayload) - offset);
   const uint8_t bit = static_cast<uint8_t>(1U << fragment);
   if ((partial_.mask & bit) != 0) {
     if (std::memcmp(partial_.bytes.data() + offset, data + 2, length) == 0) return;
@@ -441,12 +447,13 @@ void BoardStateCanCore::on_fragment_locked(const uint8_t * data, uint8_t dlc, Cl
 
   std::memcpy(partial_.bytes.data() + offset, data + 2, length);
   partial_.mask = static_cast<uint8_t>(partial_.mask | bit);
-  if (partial_.mask == 0x1F) complete_sample_locked(now);
+  constexpr uint8_t complete_mask = (1U << BOARD_STATE_CAN_FRAGMENT_COUNT) - 1U;
+  if (partial_.mask == complete_mask) complete_sample_locked(now);
 }
 
 void BoardStateCanCore::complete_sample_locked(Clock::time_point now)
 {
-  BoardState message{};
+  BoardStateCanPayload message{};
   std::memcpy(&message, partial_.bytes.data(), sizeof(message));
   const auto finite = [](const float * values, size_t count) {
     for (size_t i = 0; i < count; ++i) {
@@ -455,10 +462,10 @@ void BoardStateCanCore::complete_sample_locked(Clock::time_point now)
     return true;
   };
   Eigen::Quaterniond q(message.q[0], message.q[1], message.q[2], message.q[3]);
-  const float scalars[] = {message.yaw, message.pitch, message.bullet_speed};
+  const float scalars[] = {message.bullet_speed};
   const bool finite_quaternion = std::isfinite(message.q[0]) && std::isfinite(message.q[1]) &&
                                  std::isfinite(message.q[2]) && std::isfinite(message.q[3]);
-  if (!finite_quaternion || !finite(scalars, 3) || !std::isfinite(q.norm()) || !(q.norm() > 1e-6)) {
+  if (!finite_quaternion || !finite(scalars, 1) || !std::isfinite(q.norm()) || !(q.norm() > 1e-6)) {
     ++stats_.rejected_fragment;
     clear_sample_locked();
     return;
@@ -466,8 +473,9 @@ void BoardStateCanCore::complete_sample_locked(Clock::time_point now)
   q.normalize();
 
   state_.q = q;
-  state_.yaw = message.yaw;
-  state_.pitch = message.pitch;
+  // CAN v1 has no motor-angle feedback. Never present zero as a measurement.
+  state_.yaw = std::numeric_limits<float>::quiet_NaN();
+  state_.pitch = std::numeric_limits<float>::quiet_NaN();
   state_.bullet_speed = message.bullet_speed;
   std::memcpy(state_.mode.data(), message.mode, MODE_LEN);
   state_.timestamp = now;

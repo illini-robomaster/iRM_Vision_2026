@@ -36,14 +36,12 @@ io::BoardStateCanConfig test_config()
   return config;
 }
 
-io::BoardState make_state(float yaw = -0.5f)
+io::BoardStateCanPayload make_state()
 {
   const float c = std::sqrt(0.5f);
-  io::BoardState state{};
+  io::BoardStateCanPayload state{};
   state.q[0] = c;
   state.q[3] = c;
-  state.yaw = yaw;
-  state.pitch = 0.25f;
   state.bullet_speed = 15.0f;
   state.mode[0] = 0xAA;
   return state;
@@ -84,8 +82,8 @@ void complete_handshake(io::BoardStateCanCore & core, uint32_t session, Clock::t
 }
 
 void send_fragment(
-  io::BoardStateCanCore & core, const io::BoardState & state, uint32_t session, uint8_t sequence,
-  uint8_t fragment, Clock::time_point now)
+  io::BoardStateCanCore & core, const io::BoardStateCanPayload & state, uint32_t session,
+  uint8_t sequence, uint8_t fragment, Clock::time_point now)
 {
   uint8_t data[8]{};
   check(
@@ -95,8 +93,8 @@ void send_fragment(
 }
 
 void send_sample(
-  io::BoardStateCanCore & core, const io::BoardState & state, uint32_t session, uint8_t sequence,
-  Clock::time_point now, const std::vector<uint8_t> & order = {0, 1, 2, 3, 4})
+  io::BoardStateCanCore & core, const io::BoardStateCanPayload & state, uint32_t session,
+  uint8_t sequence, Clock::time_point now, const std::vector<uint8_t> & order = {0, 1, 2, 3})
 {
   for (const uint8_t fragment : order) send_fragment(core, state, session, sequence, fragment, now);
 }
@@ -139,8 +137,8 @@ void test_fragment_codec()
 {
   std::cout << "[fragment codec]" << std::endl;
   const auto state = make_state();
-  std::vector<uint8_t> image(sizeof(io::BoardState));
-  for (uint8_t fragment = 0; fragment < 5; ++fragment) {
+  std::vector<uint8_t> image(sizeof(io::BoardStateCanPayload));
+  for (uint8_t fragment = 0; fragment < 4; ++fragment) {
     uint8_t data[8]{};
     check(
       io::encode_board_state_can_fragment(state, 0x12345678, 7, fragment, data),
@@ -153,24 +151,59 @@ void test_fragment_codec()
       io::decode_board_state_can_fragment_header(data, 8, sequence, tag, decoded_fragment) &&
         sequence == 7 && tag == 0x78 && decoded_fragment == fragment,
       "fragment header decodes");
-    const size_t length = fragment == 4 ? 5 : 6;
+    const size_t length = fragment == 3 ? 3 : 6;
     std::memcpy(image.data() + fragment * 6, data + 2, length);
-    if (fragment == 4) check(data[7] == 0, "tail padding is zero");
+    if (fragment == 3) check(data[5] == 0 && data[6] == 0 && data[7] == 0, "tail padding is zero");
   }
   check(
     std::memcmp(image.data(), &state, sizeof(state)) == 0,
-    "five fragments reproduce all 29 payload bytes");
+    "four fragments reproduce all 21 payload bytes");
 
   uint8_t data[8]{};
-  check(!io::encode_board_state_can_fragment(state, 1, 0, 5, data), "fragment five rejected");
-  io::encode_board_state_can_fragment(state, 1, 0, 4, data);
-  data[7] = 1;
-  uint8_t sequence = 0;
-  uint8_t tag = 0;
-  uint8_t fragment = 0;
+  check(!io::encode_board_state_can_fragment(state, 1, 0, 4, data), "fifth fragment rejected");
+  for (size_t padding = 5; padding < 8; ++padding) {
+    io::encode_board_state_can_fragment(state, 1, 0, 3, data);
+    data[padding] = 1;
+    uint8_t sequence = 0;
+    uint8_t tag = 0;
+    uint8_t fragment = 0;
+    check(
+      !io::decode_board_state_can_fragment_header(data, 8, sequence, tag, fragment),
+      "nonzero tail padding rejected at byte " + std::to_string(padding));
+  }
+}
+
+void test_embedded_golden_sample()
+{
+  std::cout << "[Embedded 21-byte golden sample]" << std::endl;
+  io::BoardStateCanCore core(test_config());
+  const auto t0 = Clock::time_point{};
+  complete_handshake(core, 0x12345678, t0);
+  // Independent firmware wire vectors: q=(1,0,0,0), speed=15, mode=0xAA.
+  // Do not generate input with the Jetson encoder: catch symmetric codec bugs.
+  const uint8_t frames[4][8] = {
+    {0x07, 0x78, 0x00, 0x00, 0x80, 0x3F, 0x00, 0x00},
+    {0x27, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x47, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x67, 0x78, 0x70, 0x41, 0xAA, 0x00, 0x00, 0x00},
+  };
+  io::BoardStateCanPayload expected{};
+  expected.q[0] = 1;
+  expected.bullet_speed = 15;
+  expected.mode[0] = 0xAA;
+  for (uint8_t f = 0; f < 4; ++f) {
+    uint8_t encoded[8]{};
+    io::encode_board_state_can_fragment(expected, 0x12345678, 7, f, encoded);
+    check(std::memcmp(encoded, frames[f], 8) == 0, "Embedded fragment golden vector");
+    core.on_frame(core.config().data_canid, frames[f], 8, t0 + 1ms);
+    check(core.stats().valid_packets == (f == 3 ? 1U : 0U), "publish only on fourth fragment");
+  }
+  const auto state = core.state();
   check(
-    !io::decode_board_state_can_fragment_header(data, 8, sequence, tag, fragment),
-    "nonzero tail padding rejected");
+    state.q.w() == 1 && state.q.vec().norm() == 0 && state.bullet_speed == 15 &&
+      state.mode[0] == 0xAA && std::isnan(state.yaw) && std::isnan(state.pitch),
+    "Embedded payload decoded; motor angles explicitly unavailable");
+  check(sizeof(io::BoardState) == 29, "UART absolute-pose wire layout unchanged");
 }
 
 void test_handshake_recovery()
@@ -275,13 +308,13 @@ void test_reassembly()
   complete_handshake(core, session, t0);
   const auto state = make_state();
 
-  send_sample(core, state, session, 3, t0 + 1ms, {2, 0, 4, 1});
+  send_sample(core, state, session, 3, t0 + 1ms, {2, 0, 1});
   check(core.stats().valid_packets == 0, "missing fragment never publishes");
   send_fragment(core, state, session, 3, 3, t0 + 2ms);
   check(core.stats().valid_packets == 1, "out-of-order fragments complete one sample");
   const auto decoded = core.state();
   check(
-    decoded.yaw == state.yaw && decoded.pitch == state.pitch &&
+    std::isnan(decoded.yaw) && std::isnan(decoded.pitch) &&
       decoded.bullet_speed == state.bullet_speed && decoded.mode[0] == state.mode[0],
     "decoded state fields match");
   send_sample(core, state, session, 3, t0 + 3ms);
@@ -289,9 +322,9 @@ void test_reassembly()
 
   send_fragment(core, state, session, 4, 0, t0 + 4ms);
   auto changed = state;
-  changed.q[0] = 0.1f;  // fragment 0 contains q[0], not yaw (which starts at byte 16)
+  changed.q[0] = 0.1f;  // fragment 0 contains q[0]
   send_fragment(core, changed, session, 4, 0, t0 + 5ms);
-  send_sample(core, state, session, 4, t0 + 6ms, {1, 2, 3, 4});
+  send_sample(core, state, session, 4, t0 + 6ms, {1, 2, 3});
   check(core.stats().valid_packets == 1, "conflicting duplicate invalidates partial sample");
   core.poll(t0 + 60ms);
   check(core.stats().partial_timeouts == 1, "partial sample expires at 50 ms");
@@ -314,10 +347,17 @@ void test_reassembly()
   send_sample(core, invalid, session, 6, t0 + 66ms);
   check(core.stats().valid_packets == 2, "NaN quaternion rejected");
 
+  invalid = state;
+  invalid.bullet_speed = std::numeric_limits<float>::infinity();
+  send_sample(core, invalid, session, 7, t0 + 67ms);
+  check(core.stats().valid_packets == 2, "nonfinite bullet speed rejected");
+
   uint8_t bad[8]{};
-  io::encode_board_state_can_fragment(state, session, 7, 0, bad);
-  bad[0] = static_cast<uint8_t>(5 << 5);
-  core.on_frame(core.config().data_canid, bad, 8, t0 + 67ms);
+  io::encode_board_state_can_fragment(state, session, 8, 0, bad);
+  bad[0] = static_cast<uint8_t>(4 << 5);
+  const auto rejected_before = core.stats().rejected_fragment;
+  core.on_frame(core.config().data_canid, bad, 8, t0 + 68ms);
+  check(core.stats().rejected_fragment == rejected_before + 1, "old fifth fragment rejected");
   check(core.stats().valid_packets == 2, "invalid fragment index rejected");
 }
 
@@ -329,10 +369,10 @@ void test_imu_interpolation()
   const uint32_t session = 55;
   complete_handshake(core, session, t0);
 
-  io::BoardState first{};
+  io::BoardStateCanPayload first{};
   first.q[0] = 1;
   first.bullet_speed = 15;
-  io::BoardState second = make_state();
+  io::BoardStateCanPayload second = make_state();
   send_sample(core, first, session, 0, t0);
   send_sample(core, second, session, 1, t0 + 10ms);
 
@@ -408,8 +448,7 @@ int run_live(const std::string & config_path)
               << " streaming=" << snapshot.streaming << " valid=" << snapshot.state_valid
               << " color=" << io::to_string(snapshot.color) << " packets=" << stats.valid_packets
               << " (+" << (stats.valid_packets - last_count) << ")"
-              << " imu_yaw=" << ypr[0] << " motor_yaw=" << state.yaw
-              << " motor_pitch=" << state.pitch << " bullet_speed=" << state.bullet_speed
+              << " imu_yaw=" << ypr[0] << " bullet_speed=" << state.bullet_speed
               << " mode=" << int(state.mode[0]) << " rejected=" << stats.rejected_fragment
               << " dropped=" << link.dropped_frame_count() << std::endl;
     last_count = stats.valid_packets;
@@ -441,6 +480,7 @@ int main(int argc, char * argv[])
   std::cout << "== board-state CAN offline tests ==" << std::endl;
   test_handshake_codec();
   test_fragment_codec();
+  test_embedded_golden_sample();
   test_handshake_recovery();
   test_final_ack_timeout();
   test_reassembly();

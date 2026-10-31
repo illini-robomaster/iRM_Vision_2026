@@ -70,10 +70,9 @@ def main():
         nonlocal sequence
         angle = 0.2 * math.sin(now)
         payload = struct.pack(
-            "<7fB", math.cos(angle / 2), 0.0, 0.0, math.sin(angle / 2),
-            -0.2, -1.5, 15.0, 1)
-        assert len(payload) == 29
-        for fragment in range(5):
+            "<5fB", math.cos(angle / 2), 0.0, 0.0, math.sin(angle / 2), 15.0, 1)
+        assert len(payload) == 21
+        for fragment in range(4):
             part = payload[fragment * 6:fragment * 6 + 6]
             header = bytes([(fragment << 5) | (sequence & 0x1F), session[0] & 0xFF])
             send(0x322, (header + part).ljust(8, b"\x00"))

@@ -1,0 +1,61 @@
+# Jetson boot deployment: MindVision + TensorRT + session-gated relative CAN.
+# Requested deployment ID map matches Embedded 2026 eoh_infant source (FDCAN1).
+# Hardware acceptance is pending: no attached camera/MCU traffic at installation.
+# No valid angle is sent before a fresh image, HELLO and CONTROL(enable=1).
+# This is NOT an absolute-pose or firing controller. Recheck IDs on another bus.
+camera_name: "mindvision"
+exposure_ms: 2
+gamma: 0.5
+vid_pid: "f622:0001"
+mv_device_index: 0
+mv_frame_speed: 1
+mv_usb_reset: true
+mv_analog_gain: 64
+mv_clr_temp_mode: 1
+mv_clr_temp_gain: "100,100,100"
+mv_sharpness: 0
+mv_contrast: 100
+mv_saturation: 100
+mv_anti_flick: 0
+mv_light_frequency: 0
+camera_matrix: [1646.694479464929, 0, 629.3347317116185, 0, 1649.159708561839, 518.9448176031, 0, 0, 1]
+distort_coeffs: [-0.07563482581065475, 0.274743634586268, 0.001505720850613093, 0.0007716521495002592, 0]
+yolo_name: yolov5
+min_confidence: 0.8
+yolov5_backend: "trt"
+yolov5_trt_engine_path: "assets/yolov5_0526_fp16.engine"
+yolov5_onnx_path: "assets/yolov5_0526.onnx"
+use_traditional: false
+use_roi: false
+enemy_color: "blue"
+relative_reference: "camera_optical"
+relative_output_frame: "camera_optical"
+relative_tx_shape: false
+relative_max_frame_age_ms: 120
+relative_send_interval_ms: 0
+relative_min_confidence: 0.8
+relative_max_reprojection_px: 15
+relative_min_depth_m: 0.1
+relative_filter_color: true
+servo_gain: 1.0
+servo_deadband_deg: 0.0
+servo_max_step_deg: 20
+servo_yaw_sign: 1
+servo_pitch_sign: 1
+servo_yaw_offset_deg: 0
+servo_pitch_offset_deg: 0
+can_interface: "can0"
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xFF
+relative_canid: 0xFE
+vision_handshake_request_canid: 0x310
+vision_handshake_response_canid: 0x311
+vision_control_canid: 0x312
+vision_can_ids_confirmed: true
+can_command_mode: "relative"
+vision_protocol: "v1"
+cboard_wait_imu: false
+vision_control_timeout_ms: 500
+relative_frame_timeout_ms: 120
+relative_tx_rate_hz: 0

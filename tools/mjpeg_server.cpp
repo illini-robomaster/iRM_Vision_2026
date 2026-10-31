@@ -73,10 +73,18 @@ struct DoneGuard
 
 namespace tools
 {
-
-MjpegServer::MjpegServer(int port, int jpeg_quality) : port_(port), quality_(jpeg_quality)
+MjpegServer::MjpegServer(int port, int jpeg_quality, const std::string & bind_address)
+: port_(port), quality_(jpeg_quality), bind_address_(bind_address)
 {
   if (port_ <= 0) return;  // 关闭状态：不占端口、不建线程
+
+  struct sockaddr_in addr;
+  std::memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  if (port_ > 65535 || ::inet_pton(AF_INET, bind_address_.c_str(), &addr.sin_addr) != 1) {
+    throw std::runtime_error("MJPEG requires a valid port and IPv4 bind address");
+  }
+  addr.sin_port = htons(static_cast<uint16_t>(port_));
 
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd_ < 0) {
@@ -85,12 +93,6 @@ MjpegServer::MjpegServer(int port, int jpeg_quality) : port_(port), quality_(jpe
 
   int yes = 1;
   ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-
-  struct sockaddr_in addr;
-  std::memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(static_cast<uint16_t>(port_));
 
   if (::bind(listen_fd_, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
     auto err = std::string(std::strerror(errno));
@@ -299,6 +301,11 @@ void MjpegServer::serve(int fd, const std::shared_ptr<std::atomic<bool>> & done)
 
 void MjpegServer::log_urls() const
 {
+  if (bind_address_ != "0.0.0.0") {
+    logger()->info(
+      "[MjpegServer] Listening on http://{}:{}/ (snapshot: /snapshot.jpg)", bind_address_, port_);
+    return;
+  }
   logger()->info(
     "[MjpegServer] MJPEG 直播已启动：实时流 http://<本机IP>:{}/ ，抓图 http://<本机IP>:{}/snapshot.jpg",
     port_, port_);

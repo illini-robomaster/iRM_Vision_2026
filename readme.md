@@ -265,6 +265,8 @@ artifacts and must not be committed.
 
 ## 11. Related documents
 
+- `documentation/jetson_boot_remote_view.md`: installed boot service, SSH-only live viewing,
+  vcan acceptance results, and pending real-camera/physical-CAN checks.
 - `documentation/vision_cboard_handoff.md`: firmware-team integration checklist and bring-up.
 - `documentation/vision_cboard_protocol.md`: current v1 handshake, sessions, control, and wire format.
 - `documentation/vision_cboard_acceptance.md`: software evidence and pending physical/mechanical tests.

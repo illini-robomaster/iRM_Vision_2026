@@ -1,0 +1,25 @@
+[Unit]
+Description=iRM Jetson relative vision, CAN v1 and SSH-only MJPEG
+Requires=irm-cansetup.service
+After=irm-cansetup.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=irm
+Group=irm
+WorkingDirectory=/home/irm/iRM-Vision-2026
+ExecStartPre=/usr/bin/test -r /home/irm/iRM-Vision-2026/assets/yolov5_0526_fp16.engine
+ExecStart=/home/irm/iRM-Vision-2026/build/relative_aim -c=configs/relative_boot.yaml -s=current -stream=8080 -stream-bind=127.0.0.1
+Restart=always
+RestartSec=10
+# Exiter and camera cleanup use SIGINT; avoid systemd's default SIGTERM.
+KillSignal=SIGINT
+TimeoutStopSec=30
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=irm-vision
+
+[Install]
+WantedBy=multi-user.target

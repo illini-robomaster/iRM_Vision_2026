@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <opencv2/opencv.hpp>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -33,7 +34,9 @@ class MjpegServer
 {
 public:
   // port <= 0 表示不启动（不会建线程/套接字，调用方可以无条件构造）
-  explicit MjpegServer(int port, int jpeg_quality = 80);
+  // IPv4 literal only; use 127.0.0.1 for SSH-only access (no public listener).
+  explicit MjpegServer(
+    int port, int jpeg_quality = 80, const std::string & bind_address = "0.0.0.0");
   ~MjpegServer();
 
   MjpegServer(const MjpegServer &) = delete;
@@ -59,6 +62,7 @@ private:
 
   int port_;
   int quality_;
+  std::string bind_address_;
   int listen_fd_ = -1;
   std::atomic<bool> quit_{false};
   std::atomic<int> clients_{0};

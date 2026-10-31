@@ -64,6 +64,7 @@ const std::string keys =
   "{dry-color      | blue                      | dry-run 颜色：red/blue }"
   "{csv            |                           | 逐帧 CSV 输出路径（留空 = 不写）}"
   "{stream         | 0                         | MJPEG 直播端口，0 = 关（无显示器时用它看 HUD）}"
+  "{stream-bind    | 0.0.0.0                   | MJPEG IPv4监听地址；SSH隧道使用127.0.0.1}"
   "{d display      |                           | 本地窗口显示（没有 X 时自动退化）}";
 
 namespace
@@ -163,6 +164,7 @@ try {
   const auto source = cli.get<std::string>("source");
   const auto csv_path = cli.get<std::string>("csv");
   const auto stream_port = cli.get<int>("stream");
+  const auto stream_bind = cli.get<std::string>("stream-bind");
   bool display = cli.has("display");
   const bool dry_enable = cli.get<int>("dry-enable") == 1;
   const auto dry_color = cli.get<std::string>("dry-color");
@@ -300,7 +302,7 @@ try {
     tools::logger()->info("[relative_aim] 逐帧 CSV：{}", csv_path);
   }
 
-  tools::MjpegServer stream(stream_port);
+  tools::MjpegServer stream(stream_port, 80, stream_bind);
   if (display) tools::logger()->info("[relative_aim] 本地显示：按 q 退出");
 
   // ===== 4) 主循环 =====
@@ -378,7 +380,12 @@ try {
 
     const double frame_t_ms = tools::delta_time(frame_time, t_start) * 1000.0;
     const double age_ms = tools::delta_time(t_detect, frame_time) * 1000.0;
-    ages_ms.push_back(age_ms);
+    // Bound diagnostics memory during unattended multi-day operation.
+    constexpr size_t kAgeHistoryLimit = 60000;
+    if (ages_ms.size() < kAgeHistoryLimit)
+      ages_ms.push_back(age_ms);
+    else
+      ages_ms[static_cast<size_t>(frames - 1) % kAgeHistoryLimit] = age_ms;
     if (obs.valid) ++valid_frames;
 
     // ---- 发布给发送线程：这一帧只交一份样本，实际发送节拍由链路决定 ----
@@ -478,7 +485,8 @@ try {
       100.0 * valid_frames / frames, published_frames,
       frames > 0 ? 100.0 * published_frames / frames : 0.0);
     tools::logger()->info(
-      "[relative_aim] 检测 {:.1f} ms/帧；观测年龄 p50={:.1f} ms p95={:.1f} ms（图像时间戳 = "
+      "[relative_aim] 检测 {:.1f} ms/帧；最近最多60000帧观测年龄 p50={:.1f} ms p95={:.1f} "
+      "ms（图像时间戳 = "
       "取流返回时刻）",
       detect_ms_sum / frames, percentile(ages_ms, 0.5), percentile(ages_ms, 0.95));
     if (link) {

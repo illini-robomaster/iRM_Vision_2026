@@ -1,5 +1,62 @@
 # Jetson boot service and SSH-only remote vision
 
+## Quick operator entry point
+
+The command `irm-vision` is installed at `~/.local/bin/irm-vision`, a symlink
+to `scripts/visionctl.sh`. It works from any directory and does not store sudo
+credentials. Administrative commands prompt through ordinary sudo if needed.
+
+| Command | Purpose |
+|---|---|
+| `irm-vision start` / `stop` / `restart` | Control the live camera + CAN service |
+| `irm-vision status` | Process status, not hardware readiness |
+| `irm-vision logs` | Follow logs; Ctrl+C only stops viewing logs |
+| `irm-vision check` | Inspect camera USB, CAN counters, engine, listener and snapshot |
+| `irm-vision enable` / `disable` | Enable-and-start / disable-and-stop boot service |
+| `irm-vision view` | Print SSH tunnel instructions and current Jetson addresses |
+| `irm-vision preview [N]` | Camera-only recognition, **no CAN**, port 8080 |
+| `irm-vision replay [N]` | Demo replay, **no CAN or industrial camera**, port 8081 |
+| `irm-vision can-reset` | Explicit can0 reset at 1 Mbps; requires the vision service stopped |
+
+Camera preview refuses to run while the boot service owns the camera. `N` is
+an optional frame count (default 0 means run until Ctrl+C). Replay can be used
+while no hardware is attached and does not modify the boot service. Both test
+modes bind video only to loopback. Stop any other manual camera process before
+starting preview or the live service; only the systemd owner is checked by the
+shortcut.
+
+### When the camera and CAN are connected later
+
+1. Connect the camera and check CAN wiring/termination/board power. Keep the
+   MCU aiming enable off initially.
+2. Run `irm-vision check`. The boot service already retries camera opening;
+   a manual restart is available with `irm-vision restart`.
+3. Use `irm-vision view` to set up the SSH tunnel and open the browser.
+4. Inspect `irm-vision logs` for first-frame READY, HELLO and CONTROL. Only
+   after checking image geometry/signs and safe actuator conditions should the
+   MCU request `enable=1`.
+5. If CAN is BUS-OFF or needs reinitialization after wiring is corrected:
+   `irm-vision stop`, `irm-vision can-reset`, `irm-vision start`. Resetting a
+   bus does not repair wiring and is never done implicitly by `check`.
+
+For camera-only bring-up:
+
+```bash
+irm-vision stop
+irm-vision preview     # no CAN; Ctrl+C exits cleanly
+irm-vision start      # restore the normal boot service afterwards
+```
+
+With no hardware at all: `irm-vision replay` and an SSH tunnel forwarding 8081
+instead of 8080 provide a demo recognition stream. `irm-vision replay 30`
+performs a finite compute-only smoke test.
+
+Shortcut validation: `bash -n` passes; help/status/check/view work from the
+installed symlink; mocked systemctl/sudo routing and argument/conflict guards
+pass. The real 30-frame replay completed with TensorRT, 28 valid observations,
+no CAN opened, clean exit. Camera-only acquisition and physical CAN reset were
+not exercised with absent hardware.
+
 ## Deployment
 
 The installed service is `irm-vision.service`, copied from
@@ -85,7 +142,13 @@ make -C build relative_aim board_state_can_test minipc_test relative_servo_test 
 sudo install -m 0644 deploy/irm-vision.service /etc/systemd/system/irm-vision.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now irm-vision
+mkdir -p ~/.local/bin
+ln -s /home/irm/iRM-Vision-2026/scripts/visionctl.sh ~/.local/bin/irm-vision
 ```
+
+The symlink command is for a fresh installation; the link already exists on
+this Jetson. If your shell omits `~/.local/bin` from PATH, use the full path or
+add that directory to your shell profile.
 
 Other machines need the service user/path, camera calibration, engine, CAN
 setup service and ID allocation adjusted. Merely copying this unit is not a
